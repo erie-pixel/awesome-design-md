@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PASCAL · 3D Brain Map (real mesh)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  :root{
+    --bg:#06080c; --panel:#0b0f17; --line:#19202e; --line2:#222b3c;
+    --txt:#e4e9f2; --txt2:#8294ad; --txt3:#48566c;
+    --primary:#ff8a3d; --primaryGlow:#ff6a00; --secondary:#4d9fff;
+  }
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif;background:var(--bg);color:var(--txt);height:100vh;overflow:hidden;}
+  .shell{display:flex;flex-direction:column;height:100vh;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:15px 22px;border-bottom:1px solid var(--line);z-index:10;background:linear-gradient(180deg,#0a0e15,#06080c);}
+  .brand{display:flex;align-items:center;gap:11px;}
+  .brand .pulse{width:9px;height:9px;border-radius:50%;background:var(--primary);box-shadow:0 0 12px var(--primaryGlow);animation:bp 2s ease-in-out infinite;}
+  @keyframes bp{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.5;transform:scale(0.85);}}
+  .brand h1{font-size:14px;font-weight:600;letter-spacing:0.02em;}
+  .brand span{font-size:11px;color:var(--txt3);margin-left:16px;}
+  .hint{font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:7px;}
+  .hint kbd{background:#131a26;border:1px solid var(--line2);border-radius:4px;padding:2px 7px;font-size:10px;color:var(--txt2);font-family:inherit;}
+  .main{display:flex;flex:1;overflow:hidden;}
+  .rail{flex:0 0 234px;border-right:1px solid var(--line);overflow-y:auto;background:var(--panel);padding:10px 0 30px;}
+  .rail::-webkit-scrollbar{width:5px;} .rail::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px;}
+  .grp{margin-bottom:4px;}
+  .grp-h{font-size:9px;font-weight:700;color:var(--txt3);letter-spacing:0.1em;text-transform:uppercase;padding:11px 18px 6px;display:flex;align-items:center;gap:7px;}
+  .grp-dot{width:6px;height:6px;border-radius:50%;}
+  .t{padding:9px 18px 9px 31px;font-size:12.5px;color:var(--txt2);cursor:pointer;border-left:2px solid transparent;transition:all 0.13s;display:flex;justify-content:space-between;align-items:center;}
+  .t:hover{background:#10151f;color:#b8c6dc;}
+  .t.on{background:linear-gradient(90deg,#1a1206,transparent);color:#fff;font-weight:500;border-left-color:var(--primary);}
+  .t .ar{opacity:0;font-size:9px;color:var(--primary);transition:opacity 0.13s;}
+  .t.on .ar{opacity:1;}
+  .stage{flex:1;position:relative;background:radial-gradient(ellipse 75% 65% at 50% 40%,#101a2c 0%,#0a0f1a 45%,#06080c 80%);min-width:0;}
+  #c{width:100%;height:100%;display:block;cursor:grab;}
+  #c:active{cursor:grabbing;}
+  .ctrl-top{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:5;}
+  .pill{display:flex;background:rgba(11,15,23,0.82);backdrop-filter:blur(10px);border:1px solid var(--line2);border-radius:9px;padding:3px;gap:2px;}
+  .vp{padding:6px 14px;border-radius:6px;font-size:11.5px;font-weight:500;border:none;cursor:pointer;background:transparent;color:var(--txt3);transition:all 0.16s;font-family:inherit;}
+  .vp:hover{color:var(--txt2);}
+  .vp.on{background:#1b2536;color:#9ec3f0;}
+  .vp.xray.on{background:#2a1b36;color:#cf9ef0;}
+  .legend{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:16px;font-size:11px;background:rgba(11,15,23,0.72);backdrop-filter:blur(8px);padding:8px 16px;border-radius:9px;border:1px solid var(--line);z-index:5;}
+  .lg{display:flex;align-items:center;gap:6px;color:var(--txt2);}
+  .lg .sw{width:11px;height:11px;border-radius:50%;}
+  .anat{position:absolute;bottom:16px;left:16px;background:rgba(11,15,23,0.72);backdrop-filter:blur(8px);padding:9px 13px;border-radius:9px;border:1px solid var(--line);z-index:5;font-size:10.5px;}
+  .anat .at{font-size:9px;color:var(--txt3);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;}
+  .anat .ai{display:flex;align-items:center;gap:7px;color:var(--txt2);margin-bottom:3px;}
+  .anat .ai:last-child{margin-bottom:0;}
+  .anat .ad{width:9px;height:9px;border-radius:50%;}
+  .credit{position:absolute;top:14px;right:16px;font-size:9.5px;color:var(--txt3);z-index:5;text-align:right;line-height:1.5;background:rgba(11,15,23,0.6);padding:6px 10px;border-radius:7px;border:1px solid var(--line);}
+  .credit a{color:#5a78a8;text-decoration:none;}
+  .loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:8;background:var(--bg);padding:40px;text-align:center;}
+  .loading .ring{width:34px;height:34px;border:2px solid var(--line2);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .loading p{font-size:12px;color:var(--txt3);max-width:460px;line-height:1.7;}
+  .loading .err{color:#e88;font-size:12.5px;}
+  .loading code{background:#131a26;padding:2px 6px;border-radius:4px;color:#9ec3f0;font-size:11px;}
+  .empty-tip{position:absolute;top:46%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;z-index:4;opacity:0.5;transition:opacity 0.4s;}
+  .empty-tip.hide{opacity:0;}
+  .empty-tip p{font-size:13px;color:var(--txt3);margin-top:6px;}
+  .detail{flex:0 0 320px;border-left:1px solid var(--line);overflow-y:auto;background:var(--panel);padding:22px 20px 40px;}
+  .detail::-webkit-scrollbar{width:5px;} .detail::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px;}
+  .d-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:11px;text-align:center;opacity:0.45;}
+  .d-empty p{font-size:12.5px;color:var(--txt3);}
+  .d-name{font-size:22px;font-weight:700;margin-bottom:7px;letter-spacing:-0.01em;}
+  .d-tag{display:inline-block;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:500;border:1px solid #f9731640;background:#1a1208;color:#fbbf24;margin-bottom:16px;}
+  .d-desc{font-size:13px;color:var(--txt2);line-height:1.7;padding:13px 15px;background:#0f141d;border-radius:10px;border:1px solid var(--line);margin-bottom:18px;}
+  .rb-h{font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:9px;color:var(--txt3);}
+  .rb{display:flex;gap:10px;padding:12px 13px;border-radius:10px;margin-bottom:7px;border:1px solid;}
+  .chip{flex-shrink:0;font-size:10px;font-weight:700;padding:3px 9px;border-radius:6px;height:fit-content;}
+  .rb-n{font-size:13.5px;font-weight:600;margin-bottom:3px;}
+  .rb-l{font-size:11px;line-height:1.5;}
+  .block{margin-bottom:14px;}
+  .rat{margin-top:18px;padding:15px;border-radius:11px;background:#080c14;border:1px solid var(--line);}
+  .rat-h{font-size:9.5px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:5px;color:#6f93c4;}
+  .rat-b{font-size:12px;color:var(--txt2);line-height:1.78;margin-bottom:13px;}
+  .ref{font-size:10px;padding:6px 11px;border-radius:6px;background:#0c1422;color:#4a76b0;border:1px solid #142033;margin-bottom:5px;line-height:1.5;}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="pulse"></div>
+      <h1>PASCAL 3D 뇌 활성화 맵</h1>
+      <span>실제 MRI 기반 뇌 mesh · 과제 선택 → 활성 영역 시각화</span>
+    </div>
+    <div class="hint"><kbd>드래그</kbd> 회전 <kbd>스크롤</kbd> 확대</div>
+  </div>
+  <div class="main">
+    <div class="rail" id="rail"></div>
+    <div class="stage">
+      <div class="loading" id="loading"><div class="ring"></div><p>뇌 모델 로딩 중...</p></div>
+      <input type="file" id="folderPick" webkitdirectory directory multiple style="display:none;"/>
+      <div class="credit">Brain mesh © Anderson Winkler<br/><a href="https://brainder.org/research/brain-for-blender/">brainder.org</a> · CC BY-SA 3.0</div>
+      <div class="ctrl-top">
+        <div class="pill">
+          <button class="vp on" id="vpFree" onclick="setCam('free')">자유 회전</button>
+          <button class="vp" id="vpTop" onclick="setCam('top')">상면</button>
+          <button class="vp" id="vpSide" onclick="setCam('side')">측면</button>
+        </div>
+        <div class="pill"><button class="vp xray" id="vpXray" onclick="toggleXray()">내부 투시</button></div>
+      </div>
+      <canvas id="c"></canvas>
+      <div class="empty-tip" id="emptyTip">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#48566c" stroke-width="1.2" style="margin:0 auto;"><path d="M9.5 2a6.5 6.5 0 0 1 5 10.5M9.5 2a6.5 6.5 0 0 0-5 10.5M15 12h6M3 12h6"/></svg>
+        <p>왼쪽에서 과제를 선택하세요</p>
+      </div>
+      <div class="anat" id="anatBox" style="display:none;">
+        <div class="at">내부 구조 (투시 모드)</div>
+        <div class="ai"><span class="ad" style="background:#2dd4bf;"></span>해마 Hippocampus</div>
+        <div class="ai"><span class="ad" style="background:#c084fc;"></span>기저핵 Basal ganglia</div>
+        <div class="ai"><span class="ad" style="background:#fb7eb0;"></span>시상 Thalamus</div>
+      </div>
+      <div class="legend">
+        <div class="lg"><span class="sw" style="background:#ff8a3d;box-shadow:0 0 8px #ff6a00;"></span>주 활성 영역</div>
+        <div class="lg"><span class="sw" style="background:#4d9fff;"></span>보조 활성 영역</div>
+      </div>
+    </div>
+    <div class="detail" id="detail">
+      <div class="d-empty"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="1.1"><path d="M9.5 2a6.5 6.5 0 0 1 5 10.5M9.5 2a6.5 6.5 0 0 0-5 10.5M9.5 2v1M9.5 22v-1M15 12h6M3 12h6"/></svg><p>과제를 선택하면<br/>상세 정보가 표시됩니다</p></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* =====================================================================
+   ⚙️  설정 (CONFIG) — 여기만 수정하면 됩니다
+   ---------------------------------------------------------------------
+   1) brainder.org/research/brain-for-blender 에서 .obj 형식 다운로드:
+      · Cortical meshes > Full hemispheres > [obj]  (pial_Full_obj.tar.bz2)
+      · Subcortical structures > [obj]              (subcortical_obj.tar.bz2)
+   2) 압축을 풀어 이 HTML과 같은 폴더의 ./models/ 안에 넣으세요.
+   3) 아래 파일명이 실제와 다르면 경로만 바꿔주세요.
+   4) ⚠️ 브라우저 보안상 file:// 로 열면 OBJ 로드가 막힙니다.
+      폴더에서 로컬 서버를 켜고 http://localhost 로 여세요:
+         python3 -m http.server 8000   → http://localhost:8000
+   ===================================================================== */
+const CONFIG = {
+  // 피질 표면 (좌/우 반구). pial = 주름이 살아있는 바깥 표면
+  cortexFiles: [
+    './models/lh.pial.obj',
+    './models/rh.pial.obj'
+  ],
+  // 피질하 구조 — 단일 .obj 안에 여러 구조가 named object로 들어있는 경우 한 파일,
+  // 또는 구조별 개별 파일이면 배열에 모두 나열
+  subcorticalFiles: [
+    './models/subcortical.obj'
+  ],
+  // 🚫 제외할 구조 (소뇌·뇌간·척수). 이름이 매칭되면 로드하지 않음
+  excludePattern: /cerebell|cerebellum|brain[\s_-]?stem|stem|ventral\s?dc|ventraldc|vertebra|spinal|csf|ventricle/i,
+
+  // 모델 방향 보정 (FreeSurfer RAS → 화면). 뇌가 누워있거나 뒤집혀 보이면 여기 조정.
+  // 기본: 위가 머리 꼭대기, 정면이 이마(전두엽)를 향하도록.
+  modelRotation: { x: -Math.PI/2, y: 0, z: 0 },   // 데이터 방향 보정(상=위). 좌우/앞뒤가 이상하면 y에 Math.PI 추가/제거
+
+  normRadius: 3.2,        // 정규화 후 뇌 반지름(고정값; 마커 좌표 기준)
+  cortexColor: 0xccbcd2,  // 피질 색
+  defaultXray: false       // true면 처음부터 투시 모드
+};
+
+/* =====================================================================
+   DATA  (인지영역 6 + 과제 23개)
+   ===================================================================== */
+const REGIONS = {
+  exec: { name:'전두엽 집행능력', short:'집행', color:0xa78bfa, hex:'#a78bfa', pos:[0, 1.3, 2.7], full:'배외측 전전두피질 (DLPFC, BA9/46)' },
+  lang: { name:'언어능력', short:'언어', color:0x38bdf8, hex:'#38bdf8', pos:[-2.55,-0.2,0.7], full:'좌측 하전두회(Broca) · 상측두회(Wernicke)' },
+  attn: { name:'주의집중력', short:'주의', color:0x818cf8, hex:'#818cf8', pos:[0.6,2.5,0.9], full:'전대상피질(dACC) · 전두-두정 네트워크(FPN)' },
+  calc: { name:'계산능력', short:'계산', color:0x94a3b8, hex:'#94a3b8', pos:[-1.85,1.75,-1.55], full:'좌측 하두정소엽 · 각회(BA39) · IPS(BA40)' },
+  mem: { name:'기억력', short:'기억', color:0x2dd4bf, hex:'#2dd4bf', pos:[-2.2,-1.15,-0.4], full:'측두엽(STG/MTG) · 해마·내후각피질(MTL)' },
+  vis: { name:'시공간능력', short:'시공간', color:0xfbbf24, hex:'#fbbf24', pos:[2.05,1.2,-2.1], full:'우측 두정-후두 접합부(POJ) · 상두정소엽(SPL)' }
+};
+
+const TASKS = [
+  { n:'단어완성', grp:'언어능력', gk:'lang', tag:'Semantic + Phonemic', primary:'lang', secondary:['exec'],
+    desc:'의미 범주와 초성 단서를 함께 제시하여 목표 단어를 인출 (예: 여행 + ㅇㄱ → 여권)',
+    r:'주 활성 영역인 언어 네트워크에서 의미 범주 처리는 좌측 전측두엽이, 초성 단서는 Broca 영역(BA44/45)이 담당합니다. 두 단서를 통합하는 과정에서 전전두엽(DLPFC)의 전략적 탐색이 보조적으로 동원됩니다.',
+    refs:['Levelt et al. (1999). A theory of lexical access. Behavioral and Brain Sciences.','Hodges & Patterson (1995). Semantic memory in Alzheimer\'s disease. Neuropsychologia.'] },
+  { n:'뒷칸/앞칸채움', grp:'언어능력', gk:'lang', tag:'Phonemic Fluency', primary:'lang', secondary:['exec'],
+    desc:'두 글자 단어에서 한 음절을 단서로 제시하고 나머지를 생성 (예: 감___ → 감탄, 감수)',
+    r:'음소 유창성은 좌측 하전두회(IFG, Broca)와 보조운동영역(SMA)에 주로 의존합니다. 음운 단서로부터 단어를 탐색·생성하는 과정에서 전두엽의 집행 통제가 함께 작동합니다.',
+    refs:['Birn et al. (2010). Neural systems supporting lexical search. Human Brain Mapping.','Gourovitch et al. (2000). Broca\'s area in verbal working memory. Neuropsychology.'] },
+  { n:'초성단어', grp:'언어능력', gk:'lang', tag:'Phonemic Fluency (초성)', primary:'lang', secondary:['exec'],
+    desc:'두 개의 초성 조합에 부합하는 단어를 생성 (예: ㄱㅁ → 가마, 고모)',
+    r:'순수 음운 탐색 과제로, 언어 영역(하전두회)의 음운 선택·억제와 전전두엽(DLPFC)의 전략적 탐색 의존도가 높습니다. 의미 유창성보다 집행 통제 부하가 큽니다.',
+    refs:['Henry et al. (2004). Verbal fluency in dementia. J Int Neuropsychol Soc.','Troyer et al. (1997). Clustering and switching in verbal fluency. Neuropsychology.'] },
+  { n:'사자성어', grp:'언어능력', gk:'lang', tag:'Semantic Naming', primary:'lang', secondary:[],
+    desc:'사자성어의 의미 정의를 제시하고 해당 표현을 인출하는 naming 과제',
+    r:'의미 기억 기반 명명은 좌측 측두엽(ITG/MTG, BA37/21)과 각회(BA39)에 의존합니다. 관용 표현은 문자적 의미보다 우측 반구 관여가 추가로 보고됩니다.',
+    refs:['Damasio et al. (1996). A neural basis for lexical retrieval. Nature.','Kempler et al. (1994). Naming in dementia. Brain and Language.'] },
+  { n:'인물기억', grp:'기억력', gk:'mem', tag:'Associative Memory', primary:'mem', secondary:[],
+    desc:'인물 사진과 특징 정보를 암기 후 퀴즈로 정오 판별 — 얼굴-사실 연합 기억',
+    r:'얼굴-정보 연합 기억은 해마(CA1/CA3)의 패턴 완성과 방추상회(FFA)의 얼굴 처리를 통합합니다. 연합 기억은 항목 기억보다 해마 의존도가 높아 MCI 초기 감별에 민감합니다.',
+    refs:['Staresina & Davachi (2006). Associative recognition. J Neuroscience.','Sperling et al. (2010). Amyloid deposition and memory decline. JAMA Neurology.'] },
+  { n:'카드매칭', grp:'기억력', gk:'mem', tag:'Visuospatial WM', primary:'mem', secondary:['vis'],
+    desc:'뒤집힌 카드 쌍의 위치를 기억해 같은 그림 짝을 맞추는 전통적 memory 게임',
+    r:'카드 위치-내용 연합 기억은 해마의 공간 지도 기능(place cells)이 주도하며, 위치의 시공간 표상에 두정엽의 시공간 작업기억이 함께 동원됩니다.',
+    refs:['Moser et al. (2008). Place cells, grid cells. Annual Review of Neuroscience.','Squire (2004). Memory systems of the brain. Neurobiology of Learning and Memory.'] },
+  { n:'기억연산', grp:'기억력', gk:'mem', tag:'WM + Arithmetic Dual', primary:'mem', secondary:['calc','exec'],
+    desc:'격자 숫자를 마스킹 후 두 위치의 숫자를 기억하여 합산값 제출',
+    r:'위치 기억(해마·두정엽)을 유지한 채 산술 연산(두정엽 IPS)을 수행하는 이중 과제입니다. 두 정보를 동시에 다루는 과정에서 전전두엽(DLPFC)의 중앙 집행기가 핵심적으로 부하됩니다.',
+    refs:['Baddeley (2003). Working memory. Nature Reviews Neuroscience.','Fuster (2009). Cortex and memory. J Cognitive Neuroscience.'] },
+  { n:'경로기억', grp:'기억력', gk:'mem', tag:'Spatial Sequential (Corsi)', primary:'mem', secondary:['vis'],
+    desc:'격자 내 컴포넌트의 이동 경로를 관찰 후 동일 경로를 재현',
+    r:'순서적 공간 기억은 해마의 시간적 순서 부호화가 주도하며, 경로의 공간 표상에 두정엽이 함께 관여합니다. Corsi Block Test의 디지털 확장입니다.',
+    refs:['Corsi (1972). Human memory and medial temporal region. McGill University.','Burgess et al. (2002). Hippocampus and spatial memory. Neuron.'] },
+  { n:'일면지교', grp:'기억력', gk:'mem', tag:"Recognition (d')", primary:'mem', secondary:[],
+    desc:'다수의 인물 사진 학습 후 이지선다에서 학습된 인물(true positive)을 선택',
+    r:'재인 기억은 친숙도 기반(perirhinal cortex)과 회상 기반(hippocampus) 처리가 병행합니다. 신호탐지이론(d\') 관점의 변별력이 MCI 감별의 핵심 지표입니다.',
+    refs:['Yonelinas (2002). Recollection and familiarity. Journal of Memory and Language.','Mandler (1980). The judgment of previous occurrence. Psychological Review.'] },
+  { n:'대소연산', grp:'계산능력', gk:'calc', tag:'Magnitude + Sequencing', primary:'calc', secondary:['exec'],
+    desc:'4개의 이항식(덧셈·뺄셈) 결과를 계산하여 오름차순으로 선택',
+    r:'수량 크기 비교(magnitude comparison)는 두정엽 내 두정구(IPS)가 주도합니다. 결과를 순서대로 배열하는 과정에서 전전두엽(DLPFC)의 계획·순서화 기능이 보조적으로 동원됩니다.',
+    refs:['Dehaene et al. (2003). Three parietal circuits for number processing. Cognitive Neuropsychology.','Arsalidou & Taylor (2011). Numbers and calculations. NeuroImage.'] },
+  { n:'암호풀기', grp:'계산능력', gk:'calc', tag:'SDMT variant', primary:'calc', secondary:['attn','mem'],
+    desc:'심볼-숫자 대응표를 참조해 심볼로 구성된 수식의 값을 계산 (SDMT 응용)',
+    r:'SDMT 계열 과제로, 두정엽의 수량 처리가 주 영역이지만 시각 탐색(주의)과 심볼-숫자 대응의 단기 연합 기억이 함께 작동합니다. 처리 속도를 측정하는 광범위 인지 과제입니다.',
+    refs:['Smith (1982). Symbol Digit Modalities Test. Western Psychological Services.','Sheridan et al. (2006). SDMT in dementia. Neuropsychology.'] },
+  { n:'계산박사', grp:'계산능력', gk:'calc', tag:'Mental Arithmetic', primary:'calc', secondary:['lang'],
+    desc:'이항~삼항식, 사칙연산을 포괄하는 다단계 난이도 산술 과제',
+    r:'절차적 계산은 전두-두정 네트워크가 담당하고, 산술 사실 인출(특히 곱셈)은 좌측 각회의 언어 기억 시스템에 의존합니다. 두정엽이 주 영역이되 언어 영역이 사실 인출을 보조합니다.',
+    refs:['Dehaene & Cohen (1995). Model of number processing. Mathematical Cognition.','Zago et al. (2001). Neural correlates of mental calculation. NeuroImage.'] },
+  { n:'집중도형', grp:'주의집중력', gk:'attn', tag:'Selective Attn + WM', primary:'attn', secondary:['exec'],
+    desc:'목표 도형 빈도를 세면서 특정 시점에 반응을 멈추는 이중 요구 주의 과제',
+    r:'지속 주의와 도형 계수는 전대상피질(ACC)과 전두-두정 네트워크가 주도합니다. 빈도를 기억하며 반응을 억제("멈춤")하는 과정에서 전전두엽의 작업기억·억제 통제가 보조적으로 작동합니다.',
+    refs:['Nee et al. (2013). Executive components of working memory. Cerebral Cortex.','Aron et al. (2014). Inhibition of inappropriate actions. Trends in Cognitive Sciences.'] },
+  { n:'획수세기', grp:'주의집중력', gk:'attn', tag:'Selective Attention', primary:'attn', secondary:['vis'],
+    desc:'한자/사자성어 글자에서 가로획 또는 세로획만 선택적으로 세는 과제',
+    r:'특정 시각 특징만 선택하는 과제는 전두-두정 주의 네트워크(FPN)의 하향식 통제가 주도하며, 글자의 획 형태 처리에 후두-두정 시각 영역이 함께 관여합니다.',
+    refs:['Corbetta & Shulman (2002). Control of attention. Nature Reviews Neuroscience.','Desimone & Duncan (1995). Selective visual attention. Annual Review of Neuroscience.'] },
+  { n:'명화퍼즐', grp:'시공간능력', gk:'vis', tag:'Visuospatial Synthesis', primary:'vis', secondary:[],
+    desc:'퍼즐 내 빈 공간에 들어갈 가장 적절한 조각을 보기에서 선택',
+    r:'우측 두정엽(SPL)의 공간 관계 처리와 복측 시각 경로의 객체 인식을 통합합니다. 전체 장면에서 누락 요소를 추론하는 부분-전체 통합 능력을 측정합니다.',
+    refs:['Ungerleider & Mishkin (1982). Two cortical visual systems. MIT Press.','Kosslyn et al. (1995). Representations of mental images. Nature.'] },
+  { n:'블록투사', grp:'시공간능력', gk:'vis', tag:'Mental Projection 3D→2D', primary:'vis', secondary:['exec'],
+    desc:'3D 블록을 위에서 아래로 투사했을 때의 2D 형태를 직접 재현',
+    r:'3D→2D 정신적 투사는 우측 상두정소엽(SPL)과 전운동피질의 협응이 주도합니다. 시점 변환(viewpoint transformation)을 계획하는 과정에서 전두엽이 보조적으로 관여합니다.',
+    refs:['Zacks & Tversky (2005). Multiple systems for spatial imagery. Psychological Review.','Shepard & Cooper (1982). Mental Images and Their Transformations. MIT Press.'] },
+  { n:'블록회전', grp:'시공간능력', gk:'vis', tag:'Mental Rotation', primary:'vis', secondary:[],
+    desc:'블록을 90/180/270도 회전한 4지선다 중 변형된 도형(오답) 찾기',
+    r:'정신적 회전(mental rotation)은 양측 두정엽(SPL, IPS)과 우측 전운동피질을 활성화하는 대표적 시공간 과제입니다. 회전 각도에 비례한 반응 시간 증가가 특징입니다.',
+    refs:['Shepard & Metzler (1971). Mental rotation of three-dimensional objects. Science.','Zacks (2008). Neuroimaging studies of mental rotation. J Cognitive Neuroscience.'] },
+  { n:'블록쌓기', grp:'시공간능력', gk:'vis', tag:'3D Constructional Praxis', primary:'vis', secondary:['exec'],
+    desc:'3D 블록 조합을 보고 부품을 조작해 동일한 구조물을 재현',
+    r:'3D 구성 능력은 우측 두정엽의 공간 처리가 주도하며, 부품 조작을 계획·실행하는 과정에서 좌측 전두엽의 운동 계획이 함께 작동합니다. Block Design 과제와 신경 기반을 공유합니다.',
+    refs:['Trojano & Grossi (1994). Mental imagery defects. Brain and Cognition.','Benton & Tranel (1993). Visuoconstructive disorders. Clinical Neuropsychology.'] },
+  { n:'도형대칭', grp:'시공간능력', gk:'vis', tag:'Mirror Transformation', primary:'vis', secondary:[],
+    desc:'도형 조합을 거울에 상하·좌우 반전시킨 결과를 직접 재현',
+    r:'거울 반전 처리는 우측 두정-후두 접합부(POJ)를 핵심적으로 활성화합니다. 반측 무시(hemispatial neglect) 환자에서 일측 반전 오류가 특징적으로 나타납니다.',
+    refs:['Corballis (1988). Recognition of disoriented shapes. Psychological Review.','Ditunno & Mann (1990). Right hemisphere specialization. Cortex.'] },
+  { n:'상하좌우', grp:'전두엽 집행능력', gk:'exec', tag:'Stroop variant', primary:'exec', secondary:['attn'],
+    desc:'화살표 방향과 불일치하는 반대 방향 텍스트를 선택 — 자동 반응 억제',
+    r:'자동적 반응(화살표 방향)을 억제하고 규칙 기반 반응(반대 방향)을 선택하는 과제로, 전대상피질(ACC)의 갈등 탐지와 DLPFC의 억제 통제가 주도합니다. 주의 통제가 함께 작동합니다.',
+    refs:['MacLeod (1991). The Stroop effect. Psychological Bulletin.','Botvinick et al. (2001). Conflict monitoring and cognitive control. Psychological Review.'] },
+  { n:'무게추론', grp:'전두엽 집행능력', gk:'exec', tag:'Relational Reasoning', primary:'exec', secondary:['calc'],
+    desc:'무게추 간 대소 관계식을 분석해 양팔저울 균형을 맞추는 조합을 추론·조작',
+    r:'이행적 추론(transitive inference)은 전전두엽(DLPFC, BA9/46)이 주도하며, 무게 관계를 정량적으로 비교하는 과정에서 두정엽의 수량 처리가 함께 동원됩니다. 유동 지능의 핵심 측정치입니다.',
+    refs:['Waltz et al. (1999). Relational reasoning in prefrontal cortex. Psychological Science.','Hampshire et al. (2012). Fractionating human intelligence. Neuron.'] },
+  { n:'한판승부', grp:'전두엽 집행능력', gk:'exec', tag:'Rule Switching + WM', primary:'exec', secondary:[],
+    desc:'가위바위보 이기기/지기/비기기 규칙 + 숫자-손모양 변환 규칙을 동시 적용',
+    r:'반응 규칙 전환(rule switching)은 DLPFC와 안와전두피질(OFC)의 인지 유연성을 측정합니다. 숫자-손모양 변환 규칙을 작업기억에 유지하며 전략을 적용하는 이중 부하 설계입니다.',
+    refs:['Miyake et al. (2000). Unity and diversity of executive functions. Cognitive Psychology.','Rogers & Monsell (1995). Costs of a predictable switch. JEP: General.'] },
+  { n:'동전달인', grp:'전두엽 집행능력', gk:'exec', tag:'Planning + Constraint', primary:'exec', secondary:['calc'],
+    desc:'제시된 금액과 동전 개수 조건을 동시에 만족하는 동전 조합을 탐색·조작',
+    r:'제약 조건 만족(constraint satisfaction)은 전전두엽-기저핵 회로의 계획 능력이 주도합니다. 금액을 맞추는 산술 처리에 두정엽이 함께 동원됩니다. Tower of London 과제와 신경 기반을 공유합니다.',
+    refs:['Shallice (1982). Specific impairments of planning. Phil Trans Royal Society B.','Robbins et al. (1998). Cognitive psychology of aging. Phil Transactions.'] }
+];
+
+/* =====================================================================
+   THREE.JS
+   ===================================================================== */
+let scene, camera, renderer, brainGroup, modelGroup, markerGroup;
+let cortexMeshes=[], regionMarkers={};
+let hippoMeshes=[], basalMeshes=[], thalamusMeshes=[], otherSub=[];
+let selTask=null, xray=CONFIG.defaultXray;
+let isDragging=false, prevX=0, prevY=0, autoRotate=true, targetZoom=9.5, curZoom=9.5;
+let softTex=null;
+const Y_AXIS=new THREE.Vector3(0,1,0);
+const canvas=document.getElementById('c');
+// 카메라 프리셋(브레인 그룹 quaternion) — Euler(피치,요,롤)
+const CAM_PRESETS={
+  free:[0.18,-0.5,0],
+  top:[-Math.PI/2,0,0],     // 위에서 아래로 내려다보기(상면)
+  side:[0,Math.PI/2,0]      // 측면
+};
+
+function initThree(){
+  scene=new THREE.Scene();
+  const stage=canvas.parentElement, W=stage.clientWidth, H=stage.clientHeight;
+  camera=new THREE.PerspectiveCamera(42, W/H, 0.1, 200);
+  camera.position.set(0,0,9.5);
+  renderer=new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+  renderer.setSize(W,H); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+
+  scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x202028, 0.55));
+  const key=new THREE.DirectionalLight(0xcfe2ff, 1.0); key.position.set(4,7,8); scene.add(key);
+  const rim=new THREE.DirectionalLight(0x8a6aff, 0.6); rim.position.set(-6,3,-6); scene.add(rim);
+  const fill=new THREE.DirectionalLight(0x3a6abf, 0.45); fill.position.set(0,-6,3); scene.add(fill);
+  const coreL=new THREE.PointLight(0x88aaff, 0.7, 16); coreL.position.set(0,0,0); scene.add(coreL);
+
+  brainGroup=new THREE.Group(); scene.add(brainGroup);
+  modelGroup=new THREE.Group(); brainGroup.add(modelGroup);
+  markerGroup=new THREE.Group(); brainGroup.add(markerGroup);
+  brainGroup.quaternion.setFromEuler(new THREE.Euler(...CAM_PRESETS.free));
+
+  buildRegions();
+  updateRegionStates();
+  bindControls();
+  setupFolderPicker();
+  animate();
+
+  loadModels();
+}
+
+/* ---- 내장 OBJ 파서 (외부 OBJLoader 불필요) ---- */
+function parseOBJ(text){
+  const verts=[];                 // [x,y,z, ...] (obj v는 1-base)
+  const groups=[]; let cur={name:'default', idx:[]};
+  const lines=text.split('\n');
+  for(let k=0;k<lines.length;k++){
+    const ln=lines[k];
+    if(ln.charCodeAt(0)===118 && ln[1]===' '){           // 'v '
+      const p=ln.split(/\s+/); verts.push(+p[1],+p[2],+p[3]);
+    }
+  }
+  function flush(){ if(cur.idx.length) groups.push(cur); }
+  for(let k=0;k<lines.length;k++){
+    const ln=lines[k];
+    const c0=ln.charCodeAt(0);
+    if((c0===111||c0===103) && ln[1]===' '){             // 'o ' or 'g '
+      flush(); cur={name:ln.slice(2).trim()||'g', idx:[]};
+    } else if(c0===102 && ln[1]===' '){                  // 'f '
+      const parts=ln.trim().split(/\s+/);
+      const vIdx=[];
+      for(let t=1;t<parts.length;t++){
+        let v=parseInt(parts[t].split('/')[0],10);
+        if(isNaN(v)) continue;
+        v = v>0 ? v-1 : (verts.length/3 + v);
+        vIdx.push(v);
+      }
+      for(let t=1;t<vIdx.length-1;t++){ cur.idx.push(vIdx[0],vIdx[t],vIdx[t+1]); }
+    }
+  }
+  flush();
+  if(groups.length===0) groups.push(cur);
+  const posArr=new Float32Array(verts);
+  const out=[];
+  for(const g of groups){
+    if(!g.idx.length) continue;
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(posArr,3)); // 그룹 간 공유(메모리 절약)
+    geo.setIndex(g.idx);
+    geo.computeVertexNormals();
+    out.push({name:g.name, geometry:geo, vcount:g.idx.length});
+  }
+  return out;
+}
+
+/* ---- FreeSurfer aseg 라벨 번호 → 구조 ---- */
+const ASEG = {
+  10:'thalamus',49:'thalamus',
+  11:'basal',50:'basal', 12:'basal',51:'basal', 13:'basal',52:'basal', 26:'basal',58:'basal',
+  17:'hippocampus',53:'hippocampus',
+  18:'amygdala',54:'amygdala',
+  16:'exclude', 7:'exclude',8:'exclude',46:'exclude',47:'exclude',
+  28:'exclude',60:'exclude', 4:'exclude',43:'exclude',14:'exclude',15:'exclude',
+  5:'exclude',44:'exclude',72:'exclude',24:'exclude',31:'exclude',63:'exclude',30:'exclude',62:'exclude'
+};
+
+// 이름 + 라벨번호로 구조 분류
+function classify(fileName, meshName){
+  const s=((meshName||'')+' '+(fileName||'')).toLowerCase();
+  if(/cerebell|brain[\s_-]?stem|brainstem|ventral\s?dc|ventraldc|vertebra|spinal|\bcsf\b|ventricle|choroid|chiasm/.test(s)) return 'exclude';
+  if(/hippocamp/.test(s)) return 'hippocampus';
+  if(/putamen|pallid|caudate|accumbens|striat|globus/.test(s)) return 'basal';
+  if(/thalam/.test(s)) return 'thalamus';
+  if(/amygdal/.test(s)) return 'amygdala';
+  if(/pial|white|inflated|hemisphere|(^|[._\/-])(lh|rh)([._\/-]|$)/.test(s)) return 'cortex';
+  const m=(fileName||'').match(/(\d{1,4})/);
+  if(m){ const lbl=parseInt(m[1],10); if(ASEG[lbl]) return ASEG[lbl]; }
+  return 'other';
+}
+
+const SUB_MAT = {
+  hippocampus:{c:0x2dd4bf,e:0x0f7a66},
+  basal:{c:0xc084fc,e:0x6b21a8},
+  thalamus:{c:0xfb7eb0,e:0x9d2e63},
+  amygdala:{c:0xf6a96b,e:0x8a4a1a},
+  other:{c:0x9aa6bf,e:0x33405a}
+};
+
+function makeCortexMaterial(){
+  return new THREE.MeshPhysicalMaterial({
+    color:CONFIG.cortexColor, roughness:0.62, metalness:0.0, clearcoat:0.35, clearcoatRoughness:0.5,
+    emissive:0x140f1a, emissiveIntensity:0.4, transparent:true, opacity:xray?0.32:1.0,
+    depthWrite:!xray, side:THREE.DoubleSide
+  });
+}
+
+let cortexFit=null;
+let counters={cortex:0,sub:0};
+let pending=[];   // {mesh, kind, vcount}
+
+// 파싱 결과를 받아 분류·수집 (재질은 finalize 단계에서 일괄 적용)
+function ingest(parsed, fname){
+  const kinds=[];
+  for(const part of parsed){
+    const kind=classify(fname, part.name);
+    kinds.push(kind);
+    if(kind==='exclude') continue;                 // 소뇌·뇌간 제거
+    const mesh=new THREE.Mesh(part.geometry);
+    pending.push({mesh, kind, vcount:part.vcount});
+  }
+  return kinds.length?[...new Set(kinds)]:['빈 파일'];
+}
+
+// 분류 확정(필요시 큰 mesh를 피질로 승격) + 재질 적용 + 배치
+function finalizeModel(){
+  // 피질이 하나도 안 잡혔으면, 가장 큰 비제외 mesh를 피질로 승격
+  const hasCortex=pending.some(p=>p.kind==='cortex');
+  if(!hasCortex && pending.length){
+    const sorted=[...pending].sort((a,b)=>b.vcount-a.vcount);
+    const big=sorted.filter(p=>p.vcount>20000).slice(0,2);
+    (big.length?big:sorted.slice(0,2)).forEach(p=>p.kind='cortex');
+  }
+  cortexFit=new THREE.Group();
+  for(const p of pending){
+    const m=p.mesh;
+    if(p.kind==='cortex'){ m.material=makeCortexMaterial(); cortexMeshes.push(m); counters.cortex++; }
+    else{
+      const mc=SUB_MAT[p.kind]||SUB_MAT.other;
+      m.material=new THREE.MeshStandardMaterial({color:mc.c, emissive:mc.e, emissiveIntensity:0.4, roughness:0.5, metalness:0.1, transparent:true, opacity:0.96});
+      if(p.kind==='hippocampus') hippoMeshes.push(m);
+      else if(p.kind==='basal') basalMeshes.push(m);
+      else if(p.kind==='thalamus') thalamusMeshes.push(m);
+      else otherSub.push(m);
+      counters.sub++;
+    }
+    cortexFit.add(m);
+  }
+  // 방향·중심·크기 정규화
+  cortexFit.rotation.set(CONFIG.modelRotation.x, CONFIG.modelRotation.y, CONFIG.modelRotation.z);
+  modelGroup.add(cortexFit);
+  modelGroup.updateMatrixWorld(true);
+  const b=new THREE.Box3().setFromObject(cortexFit);
+  const c=b.getCenter(new THREE.Vector3());
+  cortexFit.position.sub(c);
+  const sph=new THREE.Box3().setFromObject(cortexFit).getBoundingSphere(new THREE.Sphere());
+  modelGroup.scale.setScalar(CONFIG.normRadius / (sph.radius||1));
+  document.getElementById('loading').style.display='none';
+  document.getElementById('emptyTip').classList.remove('hide');
+  if(counters.sub>0) document.getElementById('anatBox').style.display='';
+  placeMarkersOnSurface();
+  updateRegionStates();
+}
+
+function resetModel(){
+  while(modelGroup.children.length) modelGroup.remove(modelGroup.children[0]);
+  cortexMeshes=[]; hippoMeshes=[]; basalMeshes=[]; thalamusMeshes=[]; otherSub=[];
+  counters={cortex:0,sub:0}; pending=[];
+}
+
+// python http.server 등의 디렉터리 목록(HTML)에서 .obj 링크 재귀 수집
+async function crawlObjFiles(dir, depth, acc){
+  if(depth>4 || acc.length>300) return acc;
+  let html;
+  try{ const res=await fetch(dir); if(!res.ok) return acc; const ct=res.headers.get('content-type')||''; if(!/html/.test(ct)) return acc; html=await res.text(); }
+  catch(e){ return acc; }
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  const hrefs=[...doc.querySelectorAll('a')].map(a=>a.getAttribute('href')).filter(Boolean);
+  for(const href of hrefs){
+    if(href.startsWith('?')||href.startsWith('/')||href.startsWith('..')||href==='./'||href.startsWith('http')) continue;
+    const url=dir.replace(/\/?$/,'/')+href;
+    if(/\.obj$/i.test(href)) acc.push(url);
+    else if(href.endsWith('/')) await crawlObjFiles(url, depth+1, acc);
+  }
+  return acc;
+}
+
+const MODEL_URLS = [
+  './models/lh.pial.obj',
+  './models/rh.pial.obj',
+  './models/subcortical_obj/Left-Accumbens-area.obj',
+  './models/subcortical_obj/Left-Amygdala.obj',
+  './models/subcortical_obj/Left-Caudate.obj',
+  './models/subcortical_obj/Left-Cerebellum-Cortex.obj',
+  './models/subcortical_obj/Left-Cerebellum-White-Matter.obj',
+  './models/subcortical_obj/Left-Hippocampus.obj',
+  './models/subcortical_obj/Left-Inf-Lat-Vent.obj',
+  './models/subcortical_obj/Left-Lateral-Ventricle.obj',
+  './models/subcortical_obj/Left-Pallidum.obj',
+  './models/subcortical_obj/Left-Putamen.obj',
+  './models/subcortical_obj/Left-Thalamus-Proper.obj',
+  './models/subcortical_obj/Left-VentralDC.obj',
+  './models/subcortical_obj/Right-Accumbens-area.obj',
+  './models/subcortical_obj/Right-Amygdala.obj',
+  './models/subcortical_obj/Right-Caudate.obj',
+  './models/subcortical_obj/Right-Cerebellum-Cortex.obj',
+  './models/subcortical_obj/Right-Cerebellum-White-Matter.obj',
+  './models/subcortical_obj/Right-Hippocampus.obj',
+  './models/subcortical_obj/Right-Inf-Lat-Vent.obj',
+  './models/subcortical_obj/Right-Lateral-Ventricle.obj',
+  './models/subcortical_obj/Right-Pallidum.obj',
+  './models/subcortical_obj/Right-Putamen.obj',
+  './models/subcortical_obj/Right-Thalamus-Proper.obj',
+  './models/subcortical_obj/Right-VentralDC.obj',
+  './models/subcortical_obj/Brain-Stem.obj',
+  './models/subcortical_obj/CC_Anterior.obj',
+  './models/subcortical_obj/CC_Central.obj',
+  './models/subcortical_obj/CC_Mid_Anterior.obj',
+  './models/subcortical_obj/CC_Mid_Posterior.obj',
+  './models/subcortical_obj/CC_Posterior.obj',
+  './models/subcortical_obj/3rd-Ventricle.obj',
+  './models/subcortical_obj/4th-Ventricle.obj'
+];
+
+async function loadModels(){
+  if(typeof THREE==='undefined'){ showErr('Three.js 라이브러리 로드 실패 — 네트워크(CDN) 연결을 확인하세요.'); return; }
+  resetModel();
+  const log=[];
+  for(const url of MODEL_URLS){
+    const fname=decodeURIComponent(url.split('/').pop());
+    try{
+      const res=await fetch(url);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text=await res.text();
+      const parsed=parseOBJ(text);
+      const k=ingest(parsed, url);
+      log.push(`✓ ${fname} — mesh ${parsed.length}개 (${k.join(', ')})`);
+    }catch(e){ log.push(`✗ ${fname} — ${e.message||'실패'}`); }
+  }
+  if(!pending.length){ showErr('인식 가능한 구조가 없습니다.', log); return; }
+  finalizeModel();
+}
+
+// 📁 폴더 직접 선택 → 내장 파서로 처리 (서버·경로·네트워크 무관, file:// 도 가능)
+function setupFolderPicker(){
+  const input=document.getElementById('folderPick');
+  input.addEventListener('change', async (e)=>{
+    const files=[...e.target.files].filter(f=>/\.obj$/i.test(f.name));
+    if(!files.length){ showErr('선택한 폴더에 .obj 파일이 없습니다.', ['pial_Full_obj 와 subcortical_obj 의 압축을 푼 폴더(또는 그 상위 폴더)를 선택하세요.']); return; }
+    resetModel();
+    const L=document.getElementById('loading'); L.style.display='flex';
+    L.innerHTML='<div class="ring"></div><p>모델 파싱 중... ('+files.length+'개 파일)</p>';
+    const log=[];
+    for(const f of files){
+      try{
+        const text=await f.text();
+        const parsed=parseOBJ(text);
+        const k=ingest(parsed, f.webkitRelativePath||f.name);
+        log.push(`✓ ${f.name} — mesh ${parsed.length}개 (${k.join(', ')})`);
+      }catch(err){ log.push(`✗ ${f.name} — ${err.message||'실패'}`); }
+    }
+    if(!pending.length){ showErr('파일을 읽었지만 인식 가능한 구조가 없습니다.', log); return; }
+    finalizeModel();
+  });
+}
+
+function showErr(msg, lines){
+  const loadingEl=document.getElementById('loading');
+  loadingEl.style.display='flex';
+  const list = (lines&&lines.length) ? `<div style="margin-top:10px;text-align:left;font-size:11px;color:#7a8aa0;max-height:160px;overflow:auto;background:#0a0e16;padding:10px 12px;border-radius:8px;border:1px solid #19202e;">${lines.map(l=>String(l).replace(/</g,'&lt;')).join('<br/>')}</div>` : '';
+  const pickBtn = `<button onclick="document.getElementById('folderPick').click()" style="margin-top:14px;padding:11px 20px;border-radius:8px;border:1px solid #2a4a7a;background:#13243c;color:#9ec3f0;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">📁 models 폴더 직접 선택</button>`;
+  loadingEl.innerHTML=`<p class="err">⚠️ ${msg}</p>
+    <p style="margin-top:8px;">아래 버튼을 눌러 <code>models</code> 폴더(pial_Full_obj·subcortical_obj 가 들어있는 상위 폴더)를 통째로 선택하세요. 서버·경로·파일명·네트워크와 무관하게 동작합니다.</p>
+    ${pickBtn}${list}`;
+  const ring=loadingEl.querySelector('.ring'); if(ring) ring.style.display='none';
+  document.getElementById('emptyTip').classList.add('hide');
+}
+
+/* ---- 인지영역 마커(피질 표면 핀) ---- */
+// 부드러운 방사형 글로우 텍스처(가운데도 과하지 않게)
+function makeSoftTexture(){
+  const s=128, cv=document.createElement('canvas'); cv.width=cv.height=s;
+  const ctx=cv.getContext('2d');
+  const g=ctx.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(255,255,255,0.95)');
+  g.addColorStop(0.25,'rgba(255,255,255,0.55)');
+  g.addColorStop(0.55,'rgba(255,255,255,0.20)');
+  g.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,s,s);
+  const t=new THREE.Texture(cv); t.needsUpdate=true; return t;
+}
+
+function buildRegions(){
+  softTex=makeSoftTexture();
+  Object.keys(REGIONS).forEach(key=>{
+    const reg=REGIONS[key];
+    const mat=new THREE.SpriteMaterial({map:softTex, color:reg.color, transparent:true, opacity:0,
+      blending:THREE.AdditiveBlending, depthWrite:false, depthTest:true});
+    const sp=new THREE.Sprite(mat);
+    sp.position.set(reg.pos[0],reg.pos[1],reg.pos[2]);
+    sp.scale.setScalar(1.0);
+    markerGroup.add(sp);
+    regionMarkers[key]=sp;
+  });
+}
+
+// 로드 후 각 영역 방향으로 광선을 쏴서 피질 표면에 마커를 붙임
+function placeMarkersOnSurface(){
+  if(!cortexMeshes.length) return;
+  const ray=new THREE.Raycaster();
+  const savedQ=brainGroup.quaternion.clone();
+  brainGroup.quaternion.identity(); brainGroup.updateMatrixWorld(true);
+  const origin=new THREE.Vector3(0,0,0);
+  Object.keys(REGIONS).forEach(key=>{
+    const dir=new THREE.Vector3(...REGIONS[key].pos).normalize();
+    ray.set(origin, dir);
+    const hits=ray.intersectObjects(cortexMeshes, true);
+    let p;
+    if(hits.length){ p=hits[hits.length-1].point.clone(); p.add(dir.clone().multiplyScalar(0.18)); } // 가장 바깥 표면 + 살짝 띄움
+    else { p=dir.multiplyScalar(CONFIG.normRadius*0.98); }
+    regionMarkers[key].position.copy(p);
+  });
+  brainGroup.quaternion.copy(savedQ); brainGroup.updateMatrixWorld(true);
+}
+
+function updateRegionStates(){
+  const task=selTask!==null?TASKS[selTask]:null;
+  Object.keys(REGIONS).forEach(key=>{
+    const sp=regionMarkers[key]; if(!sp) return;
+    let state='off';
+    if(task){ if(task.primary===key)state='primary'; else if(task.secondary.includes(key))state='secondary'; }
+    if(state==='primary'){ sp.material.color.setHex(0xff8a3d); sp.userData={op:0.9, sc:2.2, pulse:true}; }
+    else if(state==='secondary'){ sp.material.color.setHex(0x4d9fff); sp.userData={op:0.55, sc:1.7, pulse:false}; }
+    else { sp.material.color.setHex(0x4d9fff); sp.userData={op:0.0, sc:1.2, pulse:false}; }  // 비활성: 보이지 않음
+  });
+  const memA=task&&task.primary==='mem', memS=task&&task.secondary.includes('mem');
+  hippoMeshes.forEach(m=>{ m.userData={emI: memA?1.6:(memS?0.85:0.4), pulse:memA}; });
+  const execA=task&&(task.primary==='exec'||task.secondary.includes('exec'));
+  basalMeshes.forEach(m=>{ m.userData={emI: execA?1.1:0.38, pulse:false}; });
+  thalamusMeshes.forEach(m=>{ m.userData={emI:0.42, pulse:false}; });
+  otherSub.forEach(m=>{ m.userData={emI:0.3, pulse:false}; });
+}
+
+/* ---- controls (쿼터니언 트랙볼: 360° 자유 회전, 버벅임 없음) ---- */
+function dragRotate(dx,dy){
+  const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(dy*0.008, dx*0.008, 0, 'XYZ'));
+  brainGroup.quaternion.premultiply(q);   // 월드축 기준 → 트랙볼 느낌
+}
+function bindControls(){
+  canvas.addEventListener('mousedown', e=>{isDragging=true;autoRotate=false;prevX=e.clientX;prevY=e.clientY;});
+  window.addEventListener('mouseup', ()=>isDragging=false);
+  window.addEventListener('mousemove', e=>{ if(!isDragging)return; dragRotate(e.clientX-prevX, e.clientY-prevY); prevX=e.clientX; prevY=e.clientY; });
+  canvas.addEventListener('wheel', e=>{ e.preventDefault(); targetZoom+=e.deltaY*0.006; targetZoom=Math.max(5.5,Math.min(16,targetZoom)); }, {passive:false});
+  canvas.addEventListener('touchstart', e=>{ if(e.touches.length===1){isDragging=true;autoRotate=false;prevX=e.touches[0].clientX;prevY=e.touches[0].clientY;} },{passive:true});
+  canvas.addEventListener('touchend', ()=>isDragging=false);
+  canvas.addEventListener('touchmove', e=>{ if(!isDragging||e.touches.length!==1)return; dragRotate(e.touches[0].clientX-prevX, e.touches[0].clientY-prevY); prevX=e.touches[0].clientX; prevY=e.touches[0].clientY; },{passive:true});
+  window.addEventListener('resize', onResize);
+}
+function onResize(){ const s=canvas.parentElement; camera.aspect=s.clientWidth/s.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(s.clientWidth,s.clientHeight); }
+
+function setCam(mode){
+  autoRotate = (mode==='free');
+  document.getElementById('vpFree').className='vp'+(mode==='free'?' on':'');
+  document.getElementById('vpTop').className='vp'+(mode==='top'?' on':'');
+  document.getElementById('vpSide').className='vp'+(mode==='side'?' on':'');
+  const e=CAM_PRESETS[mode]||CAM_PRESETS.free;
+  brainGroup.quaternion.setFromEuler(new THREE.Euler(e[0],e[1],e[2]));
+}
+
+function toggleXray(){
+  xray=!xray;
+  document.getElementById('vpXray').className='vp xray'+(xray?' on':'');
+  cortexMeshes.forEach(m=>{ m.material.opacity=xray?0.32:1.0; m.material.transparent=true; m.material.depthWrite=!xray; m.material.needsUpdate=true; });
+}
+
+let tt=0;
+function animate(){
+  requestAnimationFrame(animate);
+  tt+=0.016;
+  if(autoRotate && !isDragging) brainGroup.rotateOnWorldAxis(Y_AXIS, 0.0024);
+  curZoom+=(targetZoom-curZoom)*0.1; camera.position.z=curZoom;
+
+  // 영역 마커(소프트 스프라이트)
+  Object.keys(regionMarkers).forEach(key=>{
+    const sp=regionMarkers[key], u=sp.userData||{};
+    if(u.op===undefined)return;
+    let op=u.op, sc=u.sc;
+    if(u.pulse){ const p=0.5+0.5*Math.sin(tt*3.0); op=u.op*(0.75+0.25*p); sc=u.sc*(1+p*0.10); }
+    sp.material.opacity+=(op-sp.material.opacity)*0.12;
+    const cur=sp.scale.x+(sc-sp.scale.x)*0.12;
+    sp.scale.setScalar(cur);
+  });
+  // 피질하 구조 발광
+  const animSub=arr=>arr.forEach(m=>{ const u=m.userData; if(!u||u.emI===undefined)return;
+    let target=u.emI; if(u.pulse){ const p=0.5+0.5*Math.sin(tt*3); target=u.emI*(0.7+0.45*p); }
+    m.material.emissiveIntensity+=(target-m.material.emissiveIntensity)*0.1; });
+  animSub(hippoMeshes); animSub(basalMeshes); animSub(thalamusMeshes); animSub(otherSub);
+
+  if(renderer) renderer.render(scene,camera);
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+function renderRail(){
+  const rail=document.getElementById('rail'); const groups={};
+  TASKS.forEach((task,i)=>{ if(!groups[task.grp])groups[task.grp]={gk:task.gk,items:[]}; groups[task.grp].items.push({...task,idx:i}); });
+  let html='';
+  Object.keys(groups).forEach(g=>{ const grp=groups[g], hex=REGIONS[grp.gk].hex;
+    html+=`<div class="grp"><div class="grp-h"><span class="grp-dot" style="background:${hex};"></span>${g}</div>`;
+    grp.items.forEach(it=>{ html+=`<div class="t${selTask===it.idx?' on':''}" onclick="pick(${it.idx})"><span>${it.n}</span><span class="ar">▶</span></div>`; });
+    html+=`</div>`;
+  });
+  rail.innerHTML=html;
+}
+function renderDetail(){
+  const panel=document.getElementById('detail');
+  if(selTask===null){ panel.innerHTML=`<div class="d-empty"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="1.1"><path d="M9.5 2a6.5 6.5 0 0 1 5 10.5M9.5 2a6.5 6.5 0 0 0-5 10.5M9.5 2v1M9.5 22v-1M15 12h6M3 12h6"/></svg><p>과제를 선택하면<br/>상세 정보가 표시됩니다</p></div>`; return; }
+  const task=TASKS[selTask], pReg=REGIONS[task.primary];
+  let sec='';
+  if(task.secondary.length){ sec=`<div class="block"><div class="rb-h">보조 활성 영역</div>`;
+    task.secondary.forEach(k=>{ const r=REGIONS[k];
+      sec+=`<div class="rb" style="background:#0b1422;border-color:#1a2c48;"><span class="chip" style="background:#13243c;color:#7ba8e0;">보조</span><div><div class="rb-n" style="color:#9ec0ec;">${r.name}</div><div class="rb-l" style="color:#6a85aa;">${r.full}</div></div></div>`; });
+    sec+=`</div>`; }
+  const refs=task.refs.map(r=>`<div class="ref">${r}</div>`).join('');
+  panel.innerHTML=`
+    <div class="d-name">${task.n}</div>
+    <div class="d-tag">${task.tag}</div>
+    <div class="d-desc">${task.desc}</div>
+    <div class="block"><div class="rb-h">주 활성 영역</div>
+      <div class="rb" style="background:#190f06;border-color:#f9731640;"><span class="chip" style="background:#ff8a3d;color:#190f06;">주</span><div><div class="rb-n" style="color:#fdba74;">${pReg.name}</div><div class="rb-l" style="color:#c08850;">${pReg.full}</div></div></div>
+    </div>
+    ${sec}
+    <div class="rat"><div class="rat-h">💡 신경과학적 근거</div><div class="rat-b">${task.r}</div><div class="rat-h" style="margin-top:6px;">📚 주요 참고문헌</div>${refs}</div>`;
+}
+function pick(i){ selTask=i; document.getElementById('emptyTip').classList.add('hide'); updateRegionStates(); renderRail(); renderDetail(); }
+
+renderRail(); renderDetail();
+window.addEventListener('load', ()=>setTimeout(initThree,100));
+</script>
+</body>
+</html>

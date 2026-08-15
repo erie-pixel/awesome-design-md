@@ -1,0 +1,1854 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf9f5">
+  <meta name="description" content="Tandem — period & cycle tracking built for couples. One cycle, two people in the loop.">
+  <title>Tandem — cycle tracking for two</title>
+  <style>
+/* ============================================================
+   Tandem — cycle tracking for two
+   Design tokens blended from two DESIGN.md sources in this repo:
+   - design-md/airbnb/DESIGN.md  (Rausch #ff385c voltage, pill
+     shapes, soft 14px cards, single shadow tier, 8px buttons)
+   - design-md/claude/DESIGN.md  (warm cream canvas #faf9f5,
+     serif display headlines, editorial pacing, teal/amber accents)
+   ============================================================ */
+
+:root {
+  /* Canvas & surfaces — Claude DESIGN.md */
+  --canvas: #faf9f5;
+  --surface-soft: #f5f0e8;
+  --surface-card: #efe9de;
+  --surface-strong: #e8e0d2;
+  --surface-dark: #181715;
+  --surface-dark-elev: #252320;
+
+  /* Ink — Claude DESIGN.md */
+  --ink: #141413;
+  --body: #3d3d3a;
+  --muted: #6c6a64;
+  --muted-soft: #8e8b82;
+  --on-dark: #faf9f5;
+  --on-dark-soft: #a09d96;
+
+  /* Voltage — Airbnb DESIGN.md (Rausch) */
+  --primary: #ff385c;
+  --primary-active: #e00b41;
+  --primary-disabled: #ffd1da;
+  --primary-soft: #fff0f3;
+
+  /* Companions — Claude DESIGN.md accents */
+  --coral: #cc785c;
+  --teal: #5db8a6;
+  --teal-soft: #e3f2ee;
+  --amber: #e8a55a;
+  --amber-soft: #faeeda;
+  --success: #5db872;
+  --error: #c64545;
+
+  /* Hairlines */
+  --hairline: #e6dfd8;
+  --hairline-soft: #ebe6df;
+
+  /* Radius — Airbnb scale */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 32px;
+  --r-pill: 9999px;
+
+  /* The single Airbnb shadow tier */
+  --shadow: rgba(0,0,0,0.02) 0 0 0 1px, rgba(0,0,0,0.04) 0 2px 6px, rgba(0,0,0,0.10) 0 4px 8px;
+  --shadow-nav: 0 -1px 0 var(--hairline), rgba(0,0,0,0.05) 0 -4px 16px;
+
+  /* Type — Claude editorial split (open substitutes per DESIGN.md) */
+  --serif: "Copernicus", "Tiempos Headline", Georgia, "Times New Roman", serif;
+  --sans: "Airbnb Cereal VF", "StyreneB", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Motion — transform/opacity only, standard + spring easings */
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --spring: cubic-bezier(.34,1.56,.64,1);
+  --t-fast: 160ms;
+  --t-med: 260ms;
+  --t-slow: 420ms;
+
+  --nav-h: 68px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html { height: 100%; }
+body {
+  min-height: 100%;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font-family: inherit; font-size: inherit; border: 0; background: none; color: inherit; cursor: pointer; }
+input, select, textarea { font-family: inherit; font-size: 16px; color: var(--ink); }
+::selection { background: var(--primary-disabled); }
+
+/* ---------- App shell: phone-frame column, mobile-first ---------- */
+#app {
+  position: relative;
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background: var(--canvas);
+  display: flex;
+  flex-direction: column;
+}
+@media (min-width: 560px) {
+  #app { box-shadow: var(--shadow); border-left: 1px solid var(--hairline); border-right: 1px solid var(--hairline); }
+}
+
+/* ---------- Header ---------- */
+.top-bar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 60px; padding: 0 16px;
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 26px; height: 26px; }
+.brand-name { font-family: var(--serif); font-size: 21px; letter-spacing: -0.3px; }
+.brand-name em { font-style: normal; color: var(--primary); }
+.top-actions { display: flex; gap: 6px; }
+.icon-btn {
+  width: 38px; height: 38px; border-radius: var(--r-pill);
+  display: grid; place-items: center;
+  background: var(--surface-soft); color: var(--ink);
+  transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease);
+}
+.icon-btn:active { transform: scale(.92); background: var(--surface-strong); }
+.icon-btn svg { width: 19px; height: 19px; }
+
+/* ---------- Panels & tab transitions ---------- */
+main { flex: 1; padding-bottom: calc(var(--nav-h) + 24px + env(safe-area-inset-bottom)); }
+.panel { display: none; padding: 20px 16px 8px; }
+.panel.active { display: block; animation: panel-in var(--t-med) var(--ease) both; }
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+/* Staggered card entrance — index set via --i */
+.panel.active .stagger { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms); }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---------- Typography ---------- */
+h1.display { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.12; letter-spacing: -0.6px; }
+h2.section-title { font-family: var(--serif); font-weight: 400; font-size: 22px; letter-spacing: -0.3px; margin: 26px 0 12px; }
+h2.section-title:first-child { margin-top: 0; }
+.sub { color: var(--muted); font-size: 14px; line-height: 1.45; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); }
+
+/* ---------- Cards ---------- */
+.card {
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 18px;
+  margin-bottom: 14px;
+}
+.card.cream { background: var(--surface-card); border-color: transparent; }
+.card.soft { background: var(--surface-soft); border-color: transparent; }
+.card.dark { background: var(--surface-dark); border-color: transparent; color: var(--on-dark); }
+.card.dark .sub { color: var(--on-dark-soft); }
+.card.voltage { background: var(--primary); border-color: transparent; color: #fff; }
+.card.voltage .sub { color: rgba(255,255,255,.85); }
+.card-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* ---------- Buttons — Airbnb DESIGN.md ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-weight: 500; font-size: 16px; line-height: 1.25;
+  border-radius: var(--r-sm);
+  padding: 13px 24px; min-height: 48px;
+  transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  user-select: none;
+}
+.btn:active { transform: scale(.97); }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:active { background: var(--primary-active); }
+.btn-secondary { background: #fff; color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.btn-ghost { background: var(--surface-soft); color: var(--ink); }
+.btn-pill { border-radius: var(--r-pill); padding: 10px 20px; min-height: 40px; font-size: 14px; }
+.btn-block { width: 100%; }
+.btn-on-voltage { background: #fff; color: var(--primary); }
+.btn-on-dark { background: var(--surface-dark-elev); color: var(--on-dark); }
+.btn[disabled] { background: var(--primary-disabled); cursor: not-allowed; }
+
+/* ---------- Chips (symptoms, moods, flow) ---------- */
+.chip-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  border-radius: var(--r-pill);
+  padding: 9px 15px;
+  background: var(--surface-soft);
+  color: var(--body);
+  font-size: 14px; font-weight: 500;
+  border: 1px solid transparent;
+  transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.chip:active { transform: scale(.94); }
+.chip.on { background: var(--ink); color: var(--on-dark); }
+.chip.on-voltage { background: var(--primary); color: #fff; }
+.chip .emo { margin-right: 5px; }
+
+/* ---------- Badges ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+  border-radius: var(--r-pill); padding: 3px 10px;
+}
+.badge-plus { background: var(--surface-dark); color: var(--amber); }
+.badge-soft { background: var(--surface-card); color: var(--body); }
+.badge-teal { background: var(--teal-soft); color: #2f7d6d; }
+.badge-voltage { background: var(--primary-soft); color: var(--primary-active); }
+
+/* ---------- Home / hero ---------- */
+.hero { text-align: center; padding-top: 8px; }
+.womb-stage { position: relative; width: 264px; height: 264px; margin: 6px auto 2px; }
+#womb-canvas { width: 100%; height: 100%; display: block; }
+.womb-halo {
+  position: absolute; inset: 14px; border-radius: 50%;
+  background: radial-gradient(circle, var(--primary-soft) 0%, transparent 68%);
+  z-index: -1;
+  animation: halo 4.4s var(--ease) infinite;
+}
+@keyframes halo { 0%,100% { transform: scale(1); opacity: .8; } 50% { transform: scale(1.07); opacity: 1; } }
+.cycle-day-pill {
+  position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
+  background: #fff; border: 1px solid var(--hairline); border-radius: var(--r-pill);
+  box-shadow: var(--shadow);
+  padding: 7px 16px; font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.phase-line { font-family: var(--serif); font-size: 28px; letter-spacing: -0.4px; margin-top: 14px; }
+.count-line { color: var(--muted); font-size: 15px; margin-top: 4px; }
+.count-line strong { color: var(--ink); }
+.quick-row { display: flex; gap: 10px; justify-content: center; margin: 18px 0 6px; }
+
+/* phase mini legend on home */
+.phase-track { display: flex; gap: 4px; margin: 20px 4px 6px; }
+.phase-track span { height: 6px; border-radius: 3px; flex: 1; background: var(--surface-strong); position: relative; overflow: hidden; }
+.phase-track span.fill-p { background: var(--primary); }
+.phase-track span.fill-f { background: var(--amber); }
+.phase-track span.fill-o { background: var(--teal); }
+.phase-track span.fill-l { background: var(--coral); }
+.phase-track-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted-soft); padding: 0 4px; }
+
+/* ---------- Calendar ---------- */
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.cal-title { font-family: var(--serif); font-size: 22px; letter-spacing: -0.3px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow { text-align: center; font-size: 11px; font-weight: 600; color: var(--muted-soft); padding: 6px 0; text-transform: uppercase; letter-spacing: .5px; }
+.cal-day {
+  position: relative; aspect-ratio: 1; border-radius: var(--r-pill);
+  display: grid; place-items: center; font-size: 14px; color: var(--body);
+  transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease);
+  background: transparent;
+}
+.cal-day:active { transform: scale(.9); }
+.cal-day.dim { color: var(--hairline); pointer-events: none; }
+.cal-day.today { box-shadow: inset 0 0 0 2px var(--ink); font-weight: 700; }
+.cal-day.period { background: var(--primary); color: #fff; font-weight: 600; }
+.cal-day.predicted { box-shadow: inset 0 0 0 1.5px var(--primary); color: var(--primary-active); background: var(--primary-soft); }
+.cal-day.fertile { background: var(--teal-soft); color: #2f7d6d; }
+.cal-day.ovulation { background: var(--teal); color: #fff; font-weight: 700; }
+.cal-day.pms { background: var(--amber-soft); color: #9a6a25; }
+.cal-day.today.period { box-shadow: inset 0 0 0 2px var(--ink); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+.legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+
+/* ---------- Log ---------- */
+.log-date-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
+.log-date-strip::-webkit-scrollbar { display: none; }
+.date-cell {
+  flex: 0 0 auto; width: 52px; padding: 8px 0; text-align: center;
+  border-radius: var(--r-md); background: var(--surface-soft);
+  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--spring);
+}
+.date-cell:active { transform: scale(.93); }
+.date-cell .dw { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.date-cell .dn { font-size: 17px; font-weight: 600; }
+.date-cell.sel { background: var(--ink); color: var(--on-dark); }
+.date-cell.sel .dw { color: var(--on-dark-soft); }
+.field-label { font-size: 13px; font-weight: 600; color: var(--muted); margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+.stepper { display: inline-flex; align-items: center; gap: 14px; background: var(--surface-soft); border-radius: var(--r-pill); padding: 6px 10px; }
+.stepper button { width: 30px; height: 30px; border-radius: 50%; background: #fff; box-shadow: var(--shadow); font-size: 17px; font-weight: 700; transition: transform var(--t-fast) var(--spring); }
+.stepper button:active { transform: scale(.85); }
+.stepper .val { min-width: 56px; text-align: center; font-weight: 600; font-size: 14px; }
+textarea.notes {
+  width: 100%; min-height: 74px; resize: vertical;
+  background: #fff; border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  padding: 12px 14px;
+  transition: border-color var(--t-fast) var(--ease);
+}
+textarea.notes:focus, input.text:focus { outline: none; border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+
+/* ---------- Insights ---------- */
+.stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat-tile { background: #fff; border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 14px 12px; text-align: center; }
+.stat-tile .big { font-family: var(--serif); font-size: 30px; letter-spacing: -0.8px; line-height: 1.1; }
+.stat-tile .big small { font-size: 14px; letter-spacing: 0; color: var(--muted); font-family: var(--sans); }
+.stat-tile .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
+.chart-wrap { overflow-x: auto; }
+.bar-chart { display: flex; align-items: flex-end; gap: 10px; height: 130px; padding-top: 8px; }
+.bar-col { flex: 1; min-width: 34px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.bar-col .bar { width: 100%; border-radius: 7px 7px 3px 3px; background: linear-gradient(180deg, var(--primary), var(--coral)); transform-origin: bottom; animation: grow var(--t-slow) var(--ease) both; animation-delay: calc(var(--i,0) * 60ms); position: relative; }
+.bar-col .bar.avg-line::after { content:""; position: absolute; inset: auto 0 0 0; }
+@keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.bar-col .v { font-size: 12px; font-weight: 600; }
+.bar-col .d { font-size: 10px; color: var(--muted-soft); }
+.freq-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.freq-row .name { flex: 0 0 108px; font-size: 13px; }
+.freq-row .track { flex: 1; height: 8px; border-radius: 4px; background: var(--surface-soft); overflow: hidden; }
+.freq-row .fill { height: 100%; border-radius: 4px; background: var(--primary); transform-origin: left; animation: growx var(--t-slow) var(--ease) both; animation-delay: calc(var(--i,0) * 50ms); }
+.freq-row .n { font-size: 12px; color: var(--muted); min-width: 26px; text-align: right; }
+@keyframes growx { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* ---------- Lock overlay for premium ---------- */
+.locked { position: relative; overflow: hidden; border-radius: var(--r-md); }
+.locked > .lock-scrim {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: color-mix(in srgb, var(--canvas) 62%, transparent);
+  backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+  border-radius: inherit; text-align: center; padding: 16px;
+}
+.lock-scrim .t { font-weight: 600; font-size: 14px; }
+
+/* ---------- Partner ---------- */
+.role-switch { display: flex; background: var(--surface-soft); border-radius: var(--r-pill); padding: 4px; margin-bottom: 16px; }
+.role-switch button { flex: 1; border-radius: var(--r-pill); padding: 9px 0; font-size: 14px; font-weight: 600; color: var(--muted); transition: color var(--t-fast) var(--ease), background var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease); }
+.role-switch button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+.note-bubble { max-width: 82%; padding: 10px 14px; border-radius: var(--r-lg); margin-bottom: 8px; font-size: 14px; line-height: 1.4; animation: rise var(--t-med) var(--ease) both; }
+.note-bubble.me { margin-left: auto; background: var(--primary); color: #fff; border-bottom-right-radius: 6px; }
+.note-bubble.them { background: var(--surface-card); border-bottom-left-radius: 6px; }
+.note-bubble .who { display: block; font-size: 10px; opacity: .7; margin-top: 3px; }
+.note-compose { display: flex; gap: 8px; margin-top: 10px; }
+.note-compose input { flex: 1; border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 11px 16px; background: #fff; }
+.note-compose input:focus { outline: none; border-color: var(--ink); }
+.send-orb { width: 46px; height: 46px; flex: 0 0 46px; border-radius: 50%; background: var(--primary); color: #fff; display: grid; place-items: center; transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease); }
+.send-orb:active { transform: scale(.88); background: var(--primary-active); }
+.tip-list { list-style: none; }
+.tip-list li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--hairline-soft); font-size: 14px; }
+.tip-list li:last-child { border-bottom: 0; }
+.tip-list .ico { flex: 0 0 auto; }
+.code-box { font-family: "JetBrains Mono", ui-monospace, monospace; letter-spacing: 4px; font-size: 22px; text-align: center; background: var(--surface-soft); border-radius: var(--r-sm); padding: 14px; margin: 10px 0; }
+
+/* ---------- Bottom tab bar ---------- */
+.tab-bar {
+  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 100%; max-width: 520px; height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--canvas) 92%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-nav);
+  display: flex; align-items: stretch; z-index: 40;
+}
+.tab-bar button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; color: var(--muted); transition: color var(--t-fast) var(--ease); position: relative; }
+.tab-bar button svg { width: 22px; height: 22px; transition: transform var(--t-med) var(--spring); }
+.tab-bar button.on { color: var(--primary); }
+.tab-bar button.on svg { transform: translateY(-2px) scale(1.08); }
+/* Center log orb — Airbnb search-orb pattern */
+.tab-orb { flex: 0 0 76px !important; }
+.tab-orb .orb {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--primary); color: #fff;
+  display: grid; place-items: center;
+  margin-top: -20px;
+  box-shadow: var(--shadow), 0 6px 16px rgba(255,56,92,.35);
+  transition: transform var(--t-fast) var(--spring), background var(--t-fast) var(--ease);
+}
+.tab-orb:active .orb { transform: scale(.9) rotate(90deg); background: var(--primary-active); }
+.tab-orb .orb svg { width: 24px; height: 24px; transform: none !important; }
+
+/* ---------- Modals & sheets ---------- */
+.scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0,0,0,.5);
+  display: flex; align-items: flex-end; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--t-med) var(--ease);
+}
+.scrim.open { opacity: 1; pointer-events: auto; }
+.sheet {
+  width: 100%; max-width: 520px; max-height: 88dvh; overflow-y: auto;
+  background: var(--canvas);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+  transform: translateY(24px);
+  transition: transform var(--t-med) var(--ease);
+}
+.scrim.open .sheet { transform: none; }
+.sheet-grab { width: 40px; height: 4px; border-radius: 2px; background: var(--hairline); margin: 6px auto 14px; }
+.sheet h3 { font-family: var(--serif); font-weight: 400; font-size: 24px; letter-spacing: -0.4px; margin-bottom: 4px; }
+.sheet .sub { margin-bottom: 14px; }
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+input.text, select.text {
+  width: 100%; height: 52px; background: #fff;
+  border: 1px solid var(--hairline); border-radius: var(--r-sm); padding: 0 14px;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+
+/* Paywall */
+.plan-card { border: 1.5px solid var(--hairline); border-radius: var(--r-md); padding: 14px 16px; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+.plan-card.sel { border-color: var(--primary); background: var(--primary-soft); }
+.plan-card .radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--hairline); flex: 0 0 20px; transition: all var(--t-fast) var(--ease); }
+.plan-card.sel .radio { border-color: var(--primary); border-width: 6px; }
+.plan-price { margin-left: auto; text-align: right; }
+.plan-price .p { font-family: var(--serif); font-size: 20px; }
+.plan-price .per { font-size: 11px; color: var(--muted); }
+.feature-check { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; font-size: 14px; }
+.feature-check .tick { color: var(--success); font-weight: 700; }
+
+/* Toast */
+#toast {
+  position: fixed; left: 50%; bottom: calc(var(--nav-h) + 18px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 16px); z-index: 80;
+  background: var(--surface-dark); color: var(--on-dark);
+  border-radius: var(--r-pill); padding: 11px 20px; font-size: 14px; font-weight: 500;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--spring);
+  max-width: 88%;
+  text-align: center;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Spritesheet viewer */
+#sheet-view img, #sheet-view canvas { width: 100%; border-radius: var(--r-md); border: 1px solid var(--hairline); background: #fff; }
+
+hr.sep { border: 0; border-top: 1px solid var(--hairline-soft); margin: 14px 0; }
+.mt8 { margin-top: 8px; } .mt16 { margin-top: 16px; }
+.center { text-align: center; }
+
+/* ---------- Reduced motion: kill all non-essential animation ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .womb-halo { animation: none; }
+}
+body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
+  animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important;
+}
+
+  </style>
+</head>
+<body>
+  <div id="app">
+
+    <header class="top-bar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 21s-7.5-4.7-9.6-9C.9 8.9 2.7 5.5 6 5.5c2 0 3.2 1 4 2.2.8-1.2 2-2.2 4-2.2 3.3 0 5.1 3.4 3.6 6.5-2.1 4.3-9.6 9-9.6 9z" fill="#ff385c"/>
+          <path d="M6.2 5.9C4.6 4.6 3 5 2.4 6.2M17.8 5.9c1.6-1.3 3.2-.9 3.8.3" stroke="#c81e48" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="2.6" cy="7.1" r="1.5" fill="#ff8fa9"/><circle cx="21.4" cy="7.1" r="1.5" fill="#ff8fa9"/>
+        </svg>
+        <span class="brand-name">Tan<em>dem</em></span>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" data-action="paywall" aria-label="Tandem Plus">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/></svg>
+        </button>
+        <button class="icon-btn" data-action="open-settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" id="panel-home" aria-label="Home"></section>
+      <section class="panel" id="panel-calendar" aria-label="Calendar"></section>
+      <section class="panel" id="panel-log" aria-label="Daily log"></section>
+      <section class="panel" id="panel-insights" aria-label="Insights"></section>
+      <section class="panel" id="panel-partner" aria-label="Partner"></section>
+    </main>
+
+    <nav class="tab-bar" aria-label="Main tabs">
+      <button data-tab="home" class="on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+        Home
+      </button>
+      <button data-tab="calendar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+        Calendar
+      </button>
+      <button data-tab="log" class="tab-orb" aria-label="Daily log">
+        <span class="orb">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </span>
+      </button>
+      <button data-tab="insights">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-6M21 20H3"/></svg>
+        Insights
+      </button>
+      <button data-tab="partner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7.5-4.7-9.6-9C.9 8.9 2.7 5.5 6 5.5c2 0 3.2 1 4 2.2.8-1.2 2-2.2 4-2.2 3.3 0 5.1 3.4 3.6 6.5-2.1 4.3-9.6 9-9.6 9z"/></svg>
+        Partner
+      </button>
+    </nav>
+
+    <!-- Sheets / modals -->
+    <div class="scrim" id="onboard"><div class="sheet"><div class="sheet-grab"></div><div id="onboard-body"></div></div></div>
+    <div class="scrim" id="settings"><div class="sheet"><div class="sheet-grab"></div><div id="settings-body"></div></div></div>
+    <div class="scrim" id="paywall"><div class="sheet"><div class="sheet-grab"></div><div id="paywall-body"></div></div></div>
+    <div class="scrim" id="day-sheet"><div class="sheet"><div class="sheet-grab"></div><div id="day-sheet-body"></div></div></div>
+    <div class="scrim" id="sheetviewer"><div class="sheet"><div class="sheet-grab"></div><div id="sheet-view"></div></div></div>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script>
+/* ============================================================
+   Tandem cycle engine — predictions computed from logged
+   period days, falling back to user settings.
+   Model (standard across popular trackers):
+   - cycle length  = interval between period starts (avg of last 6)
+   - ovulation     = next predicted start − luteal length (default 14)
+   - fertile window = ovulation −5 days … ovulation +1 day
+   - PMS window    = 4 days before predicted start
+   ============================================================ */
+
+const Cycle = (() => {
+  const pad = n => String(n).padStart(2, '0');
+  const toISO = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const parse = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+  const addDays = (iso, n) => { const d = parse(iso); d.setDate(d.getDate() + n); return toISO(d); };
+  const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 86400000);
+  const todayISO = () => toISO(new Date());
+
+  // Group sorted period day strings into consecutive runs
+  function runs(periodDays) {
+    const days = [...periodDays].sort();
+    const out = [];
+    for (const d of days) {
+      const last = out[out.length - 1];
+      if (last && diffDays(d, last.end) === 1) { last.end = d; last.len++; }
+      else out.push({ start: d, end: d, len: 1 });
+    }
+    return out;
+  }
+
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+
+  function stats(periodDays, settings) {
+    const rs = runs(periodDays);
+    const starts = rs.map(r => r.start);
+    const intervals = [];
+    for (let i = 1; i < starts.length; i++) {
+      const d = diffDays(starts[i], starts[i - 1]);
+      if (d >= 15 && d <= 60) intervals.push(d);
+    }
+    const recent = intervals.slice(-6);
+    const recentLens = rs.slice(-6).map(r => r.len).filter(l => l >= 1 && l <= 12);
+    const cycleLen = recent.length ? Math.round(mean(recent)) : settings.cycleLen;
+    const periodLen = recentLens.length ? Math.round(mean(recentLens)) : settings.periodLen;
+    const variability = recent.length > 1
+      ? Math.round(Math.max(...recent) - Math.min(...recent))
+      : null;
+    return { runs: rs, intervals: recent, cycleLen, periodLen, variability, lastStart: starts[starts.length - 1] || null };
+  }
+
+  function predictions(periodDays, settings, count = 3) {
+    const st = stats(periodDays, settings);
+    if (!st.lastStart) return { ...st, cycles: [] };
+    const cycles = [];
+    for (let k = 1; k <= count; k++) {
+      const start = addDays(st.lastStart, st.cycleLen * k);
+      const ovulation = addDays(start, -settings.luteal);
+      cycles.push({
+        start,
+        end: addDays(start, st.periodLen - 1),
+        ovulation,
+        fertileStart: addDays(ovulation, -5),
+        fertileEnd: addDays(ovulation, 1),
+        pmsStart: addDays(start, -4),
+      });
+    }
+    return { ...st, cycles };
+  }
+
+  // Classify one calendar date. Logged period wins over everything.
+  function dayInfo(iso, periodDays, settings) {
+    const set = periodDays instanceof Set ? periodDays : new Set(periodDays);
+    if (set.has(iso)) return { kind: 'period' };
+    const pred = predictions(periodDays, settings, 4);
+    if (!pred.lastStart) return { kind: 'none' };
+
+    // current (in-progress) cycle fertile window too
+    const currentOv = addDays(pred.cycles.length ? pred.cycles[0].start : pred.lastStart, pred.cycles.length ? -settings.luteal : 0);
+    const windows = pred.cycles.map(c => c);
+
+    for (const c of windows) {
+      if (iso >= c.start && iso <= c.end) return { kind: 'predicted' };
+    }
+    for (const c of windows) {
+      if (iso === c.ovulation) return { kind: 'ovulation' };
+      if (iso >= c.fertileStart && iso <= c.fertileEnd) return { kind: 'fertile' };
+    }
+    for (const c of windows) {
+      if (iso >= c.pmsStart && iso < c.start) return { kind: 'pms' };
+    }
+    void currentOv;
+    return { kind: 'none' };
+  }
+
+  // Today's headline state for the home screen / partner view
+  function current(periodDays, settings) {
+    const today = todayISO();
+    const pred = predictions(periodDays, settings, 1);
+    if (!pred.lastStart) return null;
+    const cycleDay = diffDays(today, pred.lastStart) + 1;
+    const next = pred.cycles[0];
+    const daysToPeriod = next ? diffDays(next.start, today) : null;
+    const set = new Set(periodDays);
+
+    let phase, label;
+    if (set.has(today)) { phase = 'menstrual'; label = 'Period'; }
+    else if (next && today === next.ovulation) { phase = 'ovulation'; label = 'Ovulation day'; }
+    else if (next && today >= next.fertileStart && today <= next.fertileEnd) { phase = 'fertile'; label = 'Fertile window'; }
+    else if (next && today >= next.pmsStart && today < next.start) { phase = 'pms'; label = 'PMS window'; }
+    else if (next && today < next.fertileStart) { phase = 'follicular'; label = 'Follicular phase'; }
+    else { phase = 'luteal'; label = 'Luteal phase'; }
+
+    const chance = { menstrual: 'Low', follicular: 'Low to medium', fertile: 'High', ovulation: 'Highest', luteal: 'Low', pms: 'Low' }[phase];
+
+    return { today, cycleDay, phase, label, daysToPeriod, next, cycleLen: pred.cycleLen, periodLen: pred.periodLen, chance };
+  }
+
+  return { toISO, parse, addDays, diffDays, todayISO, runs, stats, predictions, dayInfo, current };
+})();
+
+  </script>
+  <script>
+/* ============================================================
+   Tandem store — localStorage persistence + defaults
+   ============================================================ */
+
+const Store = (() => {
+  const KEY = 'tandem.v1';
+
+  const defaults = () => ({
+    onboarded: false,
+    premium: false,
+    trialEndsAt: null,
+    role: 'tracker', // 'tracker' | 'partner'
+    linked: false,
+    inviteCode: null,
+    names: { tracker: '', partner: '' },
+    settings: { cycleLen: 28, periodLen: 5, luteal: 14, reduceMotion: false, goal: 'track' }, // goal: track | ttc | avoid
+    periodDays: [],        // ['YYYY-MM-DD', ...]
+    logs: {},              // { iso: { flow, symptoms[], moods[], sex, energy, water, sleep, bbt, notes } }
+    notes: [],             // love notes: { from: 'tracker'|'partner', text, at }
+  });
+
+  let data = defaults();
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) data = Object.assign(defaults(), JSON.parse(raw));
+    } catch (e) { /* corrupted state — start fresh */ data = defaults(); }
+    return data;
+  }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* storage full/blocked */ }
+  }
+
+  function patch(fn) { fn(data); save(); }
+
+  function reset() { data = defaults(); save(); }
+
+  function get() { return data; }
+
+  function togglePeriodDay(iso) {
+    patch(d => {
+      const i = d.periodDays.indexOf(iso);
+      if (i >= 0) d.periodDays.splice(i, 1);
+      else d.periodDays.push(iso);
+      d.periodDays.sort();
+    });
+  }
+
+  function log(iso) {
+    if (!data.logs[iso]) data.logs[iso] = { flow: null, symptoms: [], moods: [], sex: null, energy: null, water: 0, sleep: null, bbt: null, notes: '' };
+    return data.logs[iso];
+  }
+
+  function sampleData() {
+    // Three realistic past cycles ending recently, plus a few logs
+    const today = Cycle.todayISO();
+    const starts = [Cycle.addDays(today, -66), Cycle.addDays(today, -37), Cycle.addDays(today, -9)];
+    const lens = [5, 6, 5];
+    const periodDays = [];
+    starts.forEach((s, i) => { for (let k = 0; k < lens[i]; k++) periodDays.push(Cycle.addDays(s, k)); });
+    const logs = {};
+    const put = (iso, o) => { logs[iso] = Object.assign({ flow: null, symptoms: [], moods: [], sex: null, energy: null, water: 0, sleep: null, bbt: null, notes: '' }, o); };
+    put(starts[2], { flow: 'Heavy', symptoms: ['Cramps', 'Fatigue'], moods: ['Sensitive'], water: 5, sleep: 7 });
+    put(Cycle.addDays(starts[2], 1), { flow: 'Heavy', symptoms: ['Cramps', 'Backache'], moods: ['Irritable'], water: 6, sleep: 6.5 });
+    put(Cycle.addDays(starts[2], 2), { flow: 'Medium', symptoms: ['Headache'], moods: ['Calm'], water: 7, sleep: 8 });
+    put(Cycle.addDays(starts[2], 3), { flow: 'Light', symptoms: [], moods: ['Happy'], water: 6, sleep: 8 });
+    put(Cycle.addDays(starts[2], 4), { flow: 'Spotting', symptoms: [], moods: ['Energetic'], water: 8, sleep: 7.5 });
+    put(Cycle.addDays(starts[1], 0), { flow: 'Medium', symptoms: ['Cramps', 'Bloating'], moods: ['Sad'], water: 4, sleep: 6 });
+    put(Cycle.addDays(starts[1], 26), { symptoms: ['Tender breasts', 'Cravings'], moods: ['Irritable'], water: 5, sleep: 6 });
+    put(Cycle.addDays(starts[1], 25), { symptoms: ['Bloating', 'Cravings'], moods: ['Anxious'], water: 4, sleep: 6.5 });
+    put(Cycle.addDays(today, -1), { symptoms: [], moods: ['Romantic'], sex: 'Protected', water: 7, sleep: 8 });
+
+    patch(d => {
+      d.periodDays = periodDays.sort();
+      d.logs = logs;
+      d.notes = [
+        { from: 'partner', text: 'Picked up your favorite tea on the way home 🍵', at: Date.now() - 86400000 * 2 },
+        { from: 'tracker', text: 'You’re the best. Movie night?', at: Date.now() - 86400000 * 2 + 3600000 },
+        { from: 'partner', text: 'Always. You pick, I’ll make popcorn 🍿', at: Date.now() - 86400000 },
+      ];
+      d.linked = true;
+      d.inviteCode = 'LUNA-7439';
+    });
+  }
+
+  return { load, save, patch, reset, get, togglePeriodDay, log, sampleData, KEY };
+})();
+
+  </script>
+  <script>
+/* ============================================================
+   Tandem sprite engine
+   Generates a full 8×8 (64-frame) spritesheet of an animated
+   "womb-heart" — a heart shaped like a womb with fallopian
+   arms, ovaries, inner lining, glow and orbiting sparkles —
+   entirely in code on an offscreen canvas, then plays it back
+   frame-by-frame like a classic spritesheet animation.
+
+   Motion practices applied:
+   - all easing baked per-frame (double-pulse heartbeat curve)
+   - playback via requestAnimationFrame, time-based (no drift)
+   - honors prefers-reduced-motion (renders a single calm frame)
+   - only canvas compositing at play time; zero layout work
+   ============================================================ */
+
+const WombSprite = (() => {
+  const COLS = 8, ROWS = 8, FRAMES = COLS * ROWS, CELL = 200;
+
+  // Phase palettes: body stays womb-pink, accents shift per phase
+  const PALETTES = {
+    menstrual:  { light: '#ff8fa9', mid: '#ff385c', deep: '#c81e48', glow: '#ff5c7c', spark: '#ffd1da', bpm: 0.9 },
+    follicular: { light: '#ffa3b8', mid: '#ff5c7c', deep: '#d42a52', glow: '#ff8fa9', spark: '#e8a55a', bpm: 1.0 },
+    fertile:    { light: '#ffb0c0', mid: '#ff5c7c', deep: '#d42a52', glow: '#5db8a6', spark: '#5db8a6', bpm: 1.15 },
+    ovulation:  { light: '#ffc2ce', mid: '#ff6b8a', deep: '#d42a52', glow: '#5db8a6', spark: '#8fe0cf', bpm: 1.3 },
+    luteal:     { light: '#f2a98f', mid: '#e0705c', deep: '#b04a38', glow: '#cc785c', spark: '#e8a55a', bpm: 0.95 },
+    pms:        { light: '#f0b283', mid: '#e08a5c', deep: '#b05f38', glow: '#e8a55a', spark: '#e8a55a', bpm: 0.85 },
+  };
+
+  // Double-pulse heartbeat envelope: lub–dub, then rest
+  function beat(t) {
+    const g = (c, w) => Math.exp(-Math.pow((t - c) / w, 2));
+    return g(0.16, 0.055) + 0.55 * g(0.34, 0.075);
+  }
+
+  function heartPath(ctx, s) {
+    // Womb-shaped heart: rounder top lobes, gently tapered base
+    ctx.beginPath();
+    ctx.moveTo(0, 30 * s);
+    ctx.bezierCurveTo(-58 * s, -12 * s, -38 * s, -52 * s, -2 * s, -26 * s);
+    ctx.bezierCurveTo(0, -28 * s, 0, -28 * s, 2 * s, -26 * s);
+    ctx.bezierCurveTo(38 * s, -52 * s, 58 * s, -12 * s, 0, 30 * s);
+    ctx.closePath();
+  }
+
+  function drawArm(ctx, dir, p, wiggle) {
+    // Fallopian arm: curl out from the top notch, ovary at the tip
+    ctx.save();
+    ctx.scale(dir, 1);
+    ctx.strokeStyle = p.deep;
+    ctx.lineWidth = 6.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(14, -34);
+    ctx.bezierCurveTo(34, -58 + wiggle * 2, 58, -56 + wiggle * 3, 66, -38 + wiggle * 2);
+    ctx.stroke();
+    // fimbriae — little fingers at the tube end
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.lineWidth = 2.6;
+      ctx.moveTo(66, -38 + wiggle * 2);
+      ctx.quadraticCurveTo(72 + i * 2, -32 + i * 5 + wiggle, 76 + i * 2.5, -28 + i * 7 + wiggle);
+      ctx.stroke();
+    }
+    // ovary
+    const og = ctx.createRadialGradient(70, -50 + wiggle * 2, 1, 70, -50 + wiggle * 2, 11);
+    og.addColorStop(0, p.light);
+    og.addColorStop(1, p.mid);
+    ctx.fillStyle = og;
+    ctx.beginPath();
+    ctx.arc(70, -50 + wiggle * 2, 10, 0, Math.PI * 2);
+    ctx.fill();
+    // follicle dots
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    [[66, -53], [73, -49], [69, -45]].forEach(([x, y]) => {
+      ctx.beginPath(); ctx.arc(x, y + wiggle * 2, 1.7, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function drawSparkle(ctx, x, y, r, alpha, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-r, 0); ctx.lineTo(r, 0);
+    ctx.moveTo(0, -r); ctx.lineTo(0, r);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawFrame(ctx, t, p) {
+    const b = beat(t);
+    const scale = 1 + 0.065 * b;
+    const glow = 0.30 + 0.42 * b;
+    const wiggle = Math.sin(t * Math.PI * 2) * 1.6;
+
+    ctx.save();
+    ctx.translate(CELL / 2, CELL / 2 + 8);
+
+    // expanding pulse ring, emitted on each beat loop
+    const ringT = (t + 0.7) % 1;
+    ctx.beginPath();
+    ctx.arc(0, -4, 52 + ringT * 44, 0, Math.PI * 2);
+    ctx.strokeStyle = p.glow;
+    ctx.globalAlpha = (1 - ringT) * 0.22;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // ambient glow
+    const gg = ctx.createRadialGradient(0, -4, 6, 0, -4, 86);
+    gg.addColorStop(0, p.glow + 'aa');
+    gg.addColorStop(1, p.glow + '00');
+    ctx.globalAlpha = glow;
+    ctx.fillStyle = gg;
+    ctx.beginPath(); ctx.arc(0, -4, 86, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // arms behind body
+    drawArm(ctx, -1, p, wiggle);
+    drawArm(ctx, 1, p, -wiggle);
+
+    // beating body
+    ctx.save();
+    ctx.scale(scale, scale);
+
+    const bg = ctx.createLinearGradient(0, -55, 0, 55);
+    bg.addColorStop(0, p.light);
+    bg.addColorStop(0.45, p.mid);
+    bg.addColorStop(1, p.deep);
+    heartPath(ctx, 1.5);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = p.deep;
+    ctx.globalAlpha = 0.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // inner lining (endometrium) — softly pulsing inner heart
+    ctx.save();
+    ctx.scale(0.58 + 0.03 * b, 0.58 + 0.03 * b);
+    const ig = ctx.createRadialGradient(0, -6, 2, 0, -6, 60);
+    ig.addColorStop(0, p.deep);
+    ig.addColorStop(1, p.mid + '00');
+    heartPath(ctx, 1.5);
+    ctx.fillStyle = ig;
+    ctx.globalAlpha = 0.65;
+    ctx.fill();
+    ctx.restore();
+
+    // cervical dimple
+    ctx.beginPath();
+    ctx.arc(0, 34, 3.4, 0, Math.PI * 2);
+    ctx.fillStyle = p.deep;
+    ctx.globalAlpha = 0.55;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // gloss highlight
+    ctx.beginPath();
+    ctx.ellipse(-20, -28, 15, 9, -0.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.38)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(-30, -14, 5, 3.2, -0.6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.30)';
+    ctx.fill();
+    ctx.restore();
+
+    // orbiting sparkles
+    for (let i = 0; i < 7; i++) {
+      const a = t * Math.PI * 2 + (i * Math.PI * 2) / 7;
+      const rad = 84 + 9 * Math.sin(t * Math.PI * 4 + i * 1.7);
+      const tw = Math.sin(t * Math.PI * 6 + i * 2.3);
+      drawSparkle(
+        ctx,
+        Math.cos(a) * rad,
+        -4 + Math.sin(a) * rad * 0.82,
+        2 + 1.6 * Math.abs(tw),
+        0.18 + 0.4 * Math.abs(tw),
+        i % 3 === 0 ? '#ffffff' : p.spark
+      );
+    }
+
+    ctx.restore();
+  }
+
+  function generateSheet(phase) {
+    const p = PALETTES[phase] || PALETTES.follicular;
+    const c = document.createElement('canvas');
+    c.width = COLS * CELL;
+    c.height = ROWS * CELL;
+    const ctx = c.getContext('2d');
+    for (let f = 0; f < FRAMES; f++) {
+      const x = (f % COLS) * CELL, y = Math.floor(f / COLS) * CELL;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.beginPath();
+      ctx.rect(0, 0, CELL, CELL);
+      ctx.clip();
+      drawFrame(ctx, f / FRAMES, p);
+      ctx.restore();
+    }
+    return c;
+  }
+
+  // ---------- Player ----------
+  let sheet = null, currentPhase = null, rafId = 0, playing = false;
+  let displayCanvas = null, dctx = null;
+
+  function reducedMotion() {
+    return document.body.classList.contains('reduce-motion') ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function blit(frame) {
+    const size = displayCanvas.width;
+    const sx = (frame % COLS) * CELL, sy = Math.floor(frame / COLS) * CELL;
+    dctx.clearRect(0, 0, size, size);
+    dctx.drawImage(sheet, sx, sy, CELL, CELL, 0, 0, size, size);
+  }
+
+  function loop() {
+    const p = PALETTES[currentPhase] || PALETTES.follicular;
+    const periodMs = 2400 / p.bpm; // one heartbeat loop
+    const step = (now) => {
+      if (!playing) return;
+      const frame = Math.floor(((now % periodMs) / periodMs) * FRAMES) % FRAMES;
+      blit(frame);
+      rafId = requestAnimationFrame(step);
+    };
+    rafId = requestAnimationFrame(step);
+  }
+
+  function mount(canvas) {
+    displayCanvas = canvas;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssSize = canvas.clientWidth || 264;
+    canvas.width = Math.round(cssSize * dpr);
+    canvas.height = Math.round(cssSize * dpr);
+    dctx = canvas.getContext('2d');
+  }
+
+  function setPhase(phase) {
+    if (!displayCanvas) return;
+    if (phase !== currentPhase || !sheet) {
+      currentPhase = phase;
+      sheet = generateSheet(phase);
+    }
+    cancelAnimationFrame(rafId);
+    if (reducedMotion()) {
+      playing = false;
+      blit(0); // calm resting frame
+    } else {
+      playing = true;
+      loop();
+    }
+  }
+
+  function stop() { playing = false; cancelAnimationFrame(rafId); }
+
+  function getSheetDataURL(phase) {
+    return generateSheet(phase || currentPhase || 'follicular').toDataURL('image/png');
+  }
+
+  // tiny generated favicon: a single small womb-heart frame
+  function favicon() {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.save();
+    ctx.translate(-CELL / 2 * 0.32 + 32, -CELL / 2 * 0.32 + 30 - 3);
+    ctx.scale(0.32, 0.32);
+    drawFrame(ctx, 0.16, PALETTES.menstrual);
+    ctx.restore();
+    return c.toDataURL('image/png');
+  }
+
+  return { mount, setPhase, stop, getSheetDataURL, favicon, PALETTES };
+})();
+
+  </script>
+  <script>
+/* ============================================================
+   Tandem — app UI
+   Tabs: Home · Calendar · Log (orb) · Insights · Partner
+   Free tier + Premium tier modeled on top period trackers
+   (calendar, predictions, symptom logging, partner sharing free;
+   advanced insights, reports, TTC tools, partner coaching paid).
+   ============================================================ */
+
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const DOW = ['Mo','Tu','We','Th','Fr','Sa','Su'];
+
+  const SYMPTOMS = ['Cramps','Headache','Backache','Tender breasts','Bloating','Acne','Fatigue','Nausea','Cravings','Insomnia','Dizziness','Discharge'];
+  const MOODS = [['Happy','😊'],['Calm','😌'],['Energetic','⚡'],['Romantic','😍'],['Sensitive','🥺'],['Irritable','😤'],['Anxious','😰'],['Sad','😢'],['Stressed','😵‍💫'],['Meh','😐']];
+  const FLOWS = ['Spotting','Light','Medium','Heavy'];
+  const SEX = ['None','Protected','Unprotected','High drive'];
+
+  const PHASE_META = {
+    menstrual:  { emoji: '🌹', color: 'var(--primary)' },
+    follicular: { emoji: '🌱', color: 'var(--amber)' },
+    fertile:    { emoji: '🌿', color: 'var(--teal)' },
+    ovulation:  { emoji: '🌕', color: 'var(--teal)' },
+    luteal:     { emoji: '🌗', color: 'var(--coral)' },
+    pms:        { emoji: '🌧️', color: 'var(--amber)' },
+  };
+
+  const TIPS = {
+    menstrual: {
+      you: ['Iron-rich food (lentils, spinach, dark chocolate) helps replace what your body loses.','Gentle heat on the lower belly eases cramps better than pushing through.','Light movement — a slow walk or stretching — can genuinely reduce cramp intensity.'],
+      partner: [['🛋️','Lower the logistics: handle dinner, dishes, errands without being asked.'],['🔥','A heating pad, warm drink, or warm bath offer beats "can I help?"'],['🎬','Suggest a cozy low-energy plan — this is a rest-and-recover week.'],['💬','Extra patience: energy and pain tolerance are genuinely lower right now.']],
+    },
+    follicular: {
+      you: ['Rising estrogen = rising energy. Great week to start things.','Strength training lands especially well in this phase.','Skin is usually at its clearest — enjoy it.'],
+      partner: [['🎉','Energy is climbing — this is the best week to plan dates and adventures.'],['🗓️','Book the trip, the dinner, the thing you keep postponing.'],['🏃','Invite them to be active together — it will land well.']],
+    },
+    fertile: {
+      you: ['You are in your fertile window — conception chance is high these days.','Cervical fluid usually turns clear and stretchy around now.','Libido often peaks along with confidence — ride the wave.'],
+      partner: [['💞','Desire and confidence usually peak now — prioritize time together.'],['🗣️','Deep conversations land especially well this week.'],['⚠️','If you are avoiding pregnancy: these are the highest-risk days.']],
+    },
+    ovulation: {
+      you: ['Ovulation day — the single most fertile day of the cycle.','Some feel a one-sided twinge (mittelschmerz). Totally normal.','Body temperature rises slightly after today — BBT logging confirms it.'],
+      partner: [['🌕','Peak fertility today — important whichever way you are planning.'],['✨','Confidence and mood are usually at their monthly high.'],['🥂','Great night for something celebratory.']],
+    },
+    luteal: {
+      you: ['Progesterone rises — energy tapers. Front-load your week.','Cravings are hormonal, not a willpower failure. Plan good snacks.','Prioritize sleep; this phase is where it pays off most.'],
+      partner: [['🍫','Stock the snacks they actually crave before they ask.'],['🧘','Slower plans beat big social events in this half of the cycle.'],['👂','Listen first, solve later.']],
+    },
+    pms: {
+      you: ['PMS window — mood dips and irritability are chemistry, not character.','Cut back caffeine and salt a little; it measurably helps.','Your period is a few days away — pads/cup/painkillers ready?'],
+      partner: [['🌧️','Heads-up: PMS window. Small frustrations feel bigger — do not take it personally.'],['🤗','Affection without expectations goes a very long way right now.'],['🧺','Quietly take chores off their plate.'],['🛒','Restock period supplies before day one — legendary partner move.']],
+    },
+  };
+
+  const GESTURES = ['Run a bath with the good salts','Write a sticky note for the mirror','Foot massage during the next episode','Make their favorite breakfast','Handle every dish today','Fresh flowers, no occasion','Charge their phone before bed','Plan a surprise picnic'];
+
+  const ICONS = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-6M21 20H3"/></svg>',
+    hearts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7.5-4.7-9.6-9C.9 8.9 2.7 5.5 6 5.5c2 0 3.2 1 4 2.2.8-1.2 2-2.2 4-2.2 3.3 0 5.1 3.4 3.6 6.5-2.1 4.3-9.6 9-9.6 9z"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    send: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+    spark: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/></svg>',
+  };
+
+  let D; // store data ref
+  let activeTab = 'home';
+  let calCursor = new Date(); calCursor.setDate(1);
+  let logDate = Cycle.todayISO();
+
+  // ---------------- utilities ----------------
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  function openSheet(id) { $('#' + id).classList.add('open'); }
+  function closeSheet(id) { $('#' + id).classList.remove('open'); }
+  function closeAllSheets() { $$('.scrim.open').forEach(s => s.classList.remove('open')); }
+
+  function fmtDate(iso, opts) {
+    return Cycle.parse(iso).toLocaleDateString(undefined, opts || { month: 'short', day: 'numeric' });
+  }
+
+  function premiumGate(inner, title) {
+    if (D.premium) return inner;
+    return `<div class="locked">
+      <div class="lock-scrim">
+        <span class="badge badge-plus">${ICONS.spark} Tandem Plus</span>
+        <div class="t">${esc(title)}</div>
+        <button class="btn btn-primary btn-pill" data-action="paywall">Unlock with Plus</button>
+      </div>
+      <div aria-hidden="true" style="filter:saturate(.8);pointer-events:none;">${inner}</div>
+    </div>`;
+  }
+
+  // ---------------- tab switching ----------------
+  function switchTab(tab) {
+    activeTab = tab;
+    $$('.tab-bar button[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+    $$('.panel').forEach(p => p.classList.remove('active'));
+    const panel = $('#panel-' + tab);
+    render(tab);
+    // force re-trigger of panel entrance animation
+    void panel.offsetWidth;
+    panel.classList.add('active');
+    if (tab === 'home') mountSprite();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  function render(tab) {
+    ({ home: renderHome, calendar: renderCalendar, log: renderLog, insights: renderInsights, partner: renderPartner })[tab]();
+  }
+  function rerender() { render(activeTab); if (activeTab === 'home') mountSprite(); }
+
+  // ---------------- sprite ----------------
+  function mountSprite() {
+    const canvas = $('#womb-canvas');
+    if (!canvas) return;
+    WombSprite.mount(canvas);
+    const cur = Cycle.current(D.periodDays, D.settings);
+    WombSprite.setPhase(cur ? cur.phase : 'follicular');
+  }
+
+  // ---------------- HOME ----------------
+  function renderHome() {
+    const cur = Cycle.current(D.periodDays, D.settings);
+    const name = D.names.tracker || 'there';
+    const meta = cur ? PHASE_META[cur.phase] : PHASE_META.follicular;
+    const hour = new Date().getHours();
+    const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
+    let headline = 'Welcome to Tandem';
+    let countLine = 'Log your period to start predictions';
+    if (cur) {
+      headline = `${meta.emoji} ${cur.label}`;
+      if (cur.phase === 'menstrual') {
+        countLine = `Day <strong>${cur.cycleDay}</strong> of your cycle`;
+      } else if (cur.daysToPeriod != null && cur.daysToPeriod >= 0) {
+        countLine = `Period in <strong>${cur.daysToPeriod} day${cur.daysToPeriod === 1 ? '' : 's'}</strong> · pregnancy chance: <strong>${cur.chance}</strong>`;
+      }
+    }
+
+    const tips = cur ? TIPS[cur.phase].you : TIPS.follicular.you;
+    const tip = tips[new Date().getDate() % tips.length];
+
+    // phase track segments across the cycle
+    let track = '', trackLabels = '';
+    if (cur) {
+      const L = cur.cycleLen;
+      const ovDay = L - D.settings.luteal;
+      const segs = [];
+      for (let d = 1; d <= L; d++) {
+        let cls = '';
+        if (d <= cur.periodLen) cls = 'fill-p';
+        else if (d >= ovDay - 5 && d < ovDay) cls = 'fill-f';
+        else if (d === ovDay || d === ovDay + 1) cls = 'fill-o';
+        else if (d > ovDay + 1) cls = 'fill-l';
+        const on = d <= cur.cycleDay && cur.cycleDay <= L;
+        segs.push(`<span class="${on ? cls : ''}"></span>`);
+      }
+      track = `<div class="phase-track">${segs.join('')}</div>`;
+      trackLabels = `<div class="phase-track-labels"><span>Day 1</span><span>Ovulation ~day ${ovDay}</span><span>Day ${L}</span></div>`;
+    }
+
+    $('#panel-home').innerHTML = `
+      <div class="hero stagger" style="--i:0">
+        <p class="eyebrow">${greet}, ${esc(name)}</p>
+        <div class="womb-stage">
+          <div class="womb-halo"></div>
+          <canvas id="womb-canvas" aria-label="Animated heart-shaped womb showing your current cycle phase"></canvas>
+          ${cur ? `<div class="cycle-day-pill">Cycle day ${cur.cycleDay}</div>` : ''}
+        </div>
+        <h1 class="phase-line">${headline}</h1>
+        <p class="count-line">${countLine}</p>
+        <div class="quick-row">
+          <button class="btn btn-primary btn-pill" data-action="quick-period">${new Set(D.periodDays).has(Cycle.todayISO()) ? 'Period today ✓' : 'Log period today'}</button>
+          <button class="btn btn-ghost btn-pill" data-action="goto-log">Log symptoms</button>
+        </div>
+        ${track}${trackLabels}
+      </div>
+
+      <div class="card cream stagger" style="--i:1">
+        <p class="eyebrow" style="margin-bottom:6px">Today's tip</p>
+        <p style="font-size:15px">${esc(tip)}</p>
+      </div>
+
+      ${cur && cur.next ? `
+      <div class="card stagger" style="--i:2">
+        <div class="card-row">
+          <div>
+            <p class="eyebrow" style="margin-bottom:4px">Next period</p>
+            <p style="font-family:var(--serif);font-size:20px">${fmtDate(cur.next.start, { weekday: 'short', month: 'long', day: 'numeric' })}</p>
+            <p class="sub">Fertile window ${fmtDate(cur.next.fertileStart)} – ${fmtDate(cur.next.fertileEnd)}</p>
+          </div>
+          <button class="icon-btn" data-action="goto-calendar" aria-label="Open calendar">${ICONS.calendar}</button>
+        </div>
+      </div>` : ''}
+
+      ${!D.premium ? `
+      <div class="card voltage stagger" style="--i:3">
+        <div class="card-row">
+          <div>
+            <p style="font-family:var(--serif);font-size:19px;margin-bottom:2px">Tandem Plus</p>
+            <p class="sub">Deep insights, health reports & partner coaching</p>
+          </div>
+          <button class="btn btn-on-voltage btn-pill" data-action="paywall">Try free</button>
+        </div>
+      </div>` : `
+      <div class="card dark stagger" style="--i:3">
+        <div class="card-row">
+          <div>
+            <p style="font-family:var(--serif);font-size:18px;color:var(--amber)">${'✦'} Plus member</p>
+            <p class="sub">All premium features unlocked</p>
+          </div>
+        </div>
+      </div>`}
+    `;
+  }
+
+  // ---------------- CALENDAR ----------------
+  function renderCalendar() {
+    const y = calCursor.getFullYear(), m = calCursor.getMonth();
+    const first = new Date(y, m, 1);
+    const startDow = (first.getDay() + 6) % 7; // Monday-first
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const today = Cycle.todayISO();
+    const set = new Set(D.periodDays);
+
+    let cells = DOW.map(d => `<div class="cal-dow">${d}</div>`).join('');
+    for (let i = 0; i < startDow; i++) cells += `<div class="cal-day dim"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const info = Cycle.dayInfo(iso, set, D.settings);
+      let cls = info.kind === 'none' ? '' : info.kind;
+      if (cls === 'pms' && !D.premium) cls = ''; // PMS shading is a Plus perk
+      const hasLog = D.logs[iso] && (D.logs[iso].symptoms.length || D.logs[iso].moods.length || D.logs[iso].flow);
+      cells += `<button class="cal-day ${cls} ${iso === today ? 'today' : ''}" data-day="${iso}" aria-label="${iso}">
+        ${d}${hasLog ? '<span style="position:absolute;bottom:4px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.7"></span>' : ''}
+      </button>`;
+    }
+
+    $('#panel-calendar').innerHTML = `
+      <div class="cal-head stagger" style="--i:0">
+        <button class="icon-btn" data-action="cal-prev" aria-label="Previous month"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <span class="cal-title">${MONTHS[m]} ${y}</span>
+        <button class="icon-btn" data-action="cal-next" aria-label="Next month"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+      <div class="cal-grid stagger" style="--i:1">${cells}</div>
+      <div class="legend stagger" style="--i:2">
+        <span><i style="background:var(--primary)"></i>Period</span>
+        <span><i style="background:var(--primary-soft);box-shadow:inset 0 0 0 1.5px var(--primary)"></i>Predicted</span>
+        <span><i style="background:var(--teal-soft)"></i>Fertile</span>
+        <span><i style="background:var(--teal)"></i>Ovulation</span>
+        <span><i style="background:var(--amber-soft)"></i>PMS ${D.premium ? '' : '🔒'}</span>
+      </div>
+      <div class="card soft stagger mt16" style="--i:3">
+        <p class="sub">Tap any day to mark or unmark period flow, or jump to its log. Predictions update automatically from what you log.</p>
+      </div>
+    `;
+  }
+
+  function openDaySheet(iso) {
+    const set = new Set(D.periodDays);
+    const isPeriod = set.has(iso);
+    $('#day-sheet-body').innerHTML = `
+      <h3>${fmtDate(iso, { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+      <p class="sub">${isPeriod ? 'Marked as a period day.' : 'Not marked as a period day.'}</p>
+      <button class="btn ${isPeriod ? 'btn-secondary' : 'btn-primary'} btn-block" data-action="toggle-period" data-day="${iso}">
+        ${isPeriod ? 'Remove period mark' : 'Mark period flow'}
+      </button>
+      <button class="btn btn-ghost btn-block mt8" data-action="open-log-day" data-day="${iso}">Open daily log</button>
+    `;
+    openSheet('day-sheet');
+  }
+
+  // ---------------- LOG ----------------
+  function renderLog() {
+    const log = Store.get().logs[logDate] || { flow: null, symptoms: [], moods: [], sex: null, water: 0, sleep: null, bbt: null, notes: '' };
+    const today = Cycle.todayISO();
+
+    // 14-day date strip ending today
+    let strip = '';
+    for (let i = 13; i >= 0; i--) {
+      const iso = Cycle.addDays(today, -i);
+      const d = Cycle.parse(iso);
+      strip += `<button class="date-cell ${iso === logDate ? 'sel' : ''}" data-logdate="${iso}">
+        <div class="dw">${d.toLocaleDateString(undefined, { weekday: 'short' })}</div>
+        <div class="dn">${d.getDate()}</div>
+      </button>`;
+    }
+
+    const chip = (group, val, on, extra = '') => `<button class="chip ${on ? 'on' : ''}" data-chip="${group}" data-val="${esc(val)}">${extra}${esc(val)}</button>`;
+
+    $('#panel-log').innerHTML = `
+      <h2 class="section-title stagger" style="--i:0">Daily log</h2>
+      <div class="log-date-strip stagger" style="--i:0">${strip}</div>
+
+      <div class="card stagger" style="--i:1">
+        <div class="field-label">Flow</div>
+        <div class="chip-grid">${FLOWS.map(f => chip('flow', f, log.flow === f)).join('')}</div>
+
+        <div class="field-label">Symptoms</div>
+        <div class="chip-grid">${SYMPTOMS.map(s => chip('symptom', s, log.symptoms.includes(s))).join('')}</div>
+
+        <div class="field-label">Mood</div>
+        <div class="chip-grid">${MOODS.map(([m, e]) => chip('mood', m, log.moods.includes(m), `<span class="emo">${e}</span>`)).join('')}</div>
+
+        <div class="field-label">Sex & drive</div>
+        <div class="chip-grid">${SEX.map(s => chip('sex', s, log.sex === s)).join('')}</div>
+      </div>
+
+      <div class="card stagger" style="--i:2">
+        <div class="card-row">
+          <div class="field-label" style="margin:0">💧 Water</div>
+          <div class="stepper">
+            <button data-action="water" data-d="-1" aria-label="Less water">−</button>
+            <span class="val">${log.water || 0} glasses</span>
+            <button data-action="water" data-d="1" aria-label="More water">+</button>
+          </div>
+        </div>
+        <hr class="sep">
+        <div class="card-row">
+          <div class="field-label" style="margin:0">😴 Sleep</div>
+          <div class="stepper">
+            <button data-action="sleep" data-d="-0.5" aria-label="Less sleep">−</button>
+            <span class="val">${log.sleep != null ? log.sleep + ' h' : '—'}</span>
+            <button data-action="sleep" data-d="0.5" aria-label="More sleep">+</button>
+          </div>
+        </div>
+        <hr class="sep">
+        <div class="card-row">
+          <div class="field-label" style="margin:0">🌡️ Basal temp <span class="badge badge-plus" style="font-size:9px">${ICONS.spark} Plus</span></div>
+          ${D.premium
+            ? `<div class="stepper">
+                <button data-action="bbt" data-d="-0.05" aria-label="Lower temperature">−</button>
+                <span class="val">${log.bbt != null ? log.bbt.toFixed(2) + ' °C' : '—'}</span>
+                <button data-action="bbt" data-d="0.05" aria-label="Higher temperature">+</button>
+              </div>`
+            : `<button class="btn btn-ghost btn-pill" data-action="paywall">${ICONS.lock} Unlock</button>`}
+        </div>
+      </div>
+
+      <div class="card stagger" style="--i:3">
+        <div class="field-label" style="margin-top:0">Notes</div>
+        <textarea class="notes" id="log-notes" placeholder="Anything else about today…">${esc(log.notes || '')}</textarea>
+        <button class="btn btn-primary btn-block mt8" data-action="save-notes">Save log</button>
+      </div>
+    `;
+  }
+
+  function mutateLog(fn) {
+    Store.patch(d => { const l = Store.log(logDate); fn(l); void d; });
+    renderLog();
+  }
+
+  // ---------------- INSIGHTS ----------------
+  function renderInsights() {
+    const st = Cycle.stats(D.periodDays, D.settings);
+    const pred = Cycle.predictions(D.periodDays, D.settings, 3);
+    const rs = st.runs;
+
+    // bar chart of last cycles
+    let bars = '<p class="sub">Log at least two periods to see cycle history.</p>';
+    if (st.intervals.length) {
+      const max = Math.max(...st.intervals, 35);
+      bars = `<div class="chart-wrap"><div class="bar-chart">` + st.intervals.map((v, i) => {
+        const startIso = rs[rs.length - st.intervals.length - 1 + i]?.start || '';
+        return `<div class="bar-col" style="--i:${i}">
+          <span class="v">${v}</span>
+          <div class="bar" style="height:${Math.round((v / max) * 82) + 8}px"></div>
+          <span class="d">${startIso ? fmtDate(startIso) : ''}</span>
+        </div>`;
+      }).join('') + `</div></div>`;
+    }
+
+    // premium: symptom frequency by phase
+    const freq = {};
+    Object.entries(D.logs).forEach(([iso, l]) => (l.symptoms || []).forEach(s => { freq[s] = (freq[s] || 0) + 1; void iso; }));
+    const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const maxF = top.length ? top[0][1] : 1;
+    const symptomChart = top.length
+      ? top.map(([s, n], i) => `<div class="freq-row" style="--i:${i}">
+          <span class="name">${esc(s)}</span>
+          <div class="track"><div class="fill" style="width:${Math.round((n / maxF) * 100)}%"></div></div>
+          <span class="n">${n}×</span>
+        </div>`).join('')
+      : '<p class="sub">No symptoms logged yet.</p>';
+
+    const cur = Cycle.current(D.periodDays, D.settings);
+    const ttc = D.settings.goal === 'ttc';
+
+    $('#panel-insights').innerHTML = `
+      <h2 class="section-title stagger" style="--i:0">Your cycle, in numbers</h2>
+      <div class="stat-row stagger" style="--i:0">
+        <div class="stat-tile"><div class="big">${st.cycleLen}<small> d</small></div><div class="lbl">Avg cycle</div></div>
+        <div class="stat-tile"><div class="big">${st.periodLen}<small> d</small></div><div class="lbl">Avg period</div></div>
+        <div class="stat-tile"><div class="big">${st.variability != null ? '±' + st.variability : '—'}${st.variability != null ? '<small> d</small>' : ''}</div><div class="lbl">Variation</div></div>
+      </div>
+
+      <div class="card stagger mt16" style="--i:1">
+        <p class="eyebrow" style="margin-bottom:10px">Cycle length history</p>
+        ${bars}
+      </div>
+
+      <div class="card stagger" style="--i:2">
+        <p class="eyebrow" style="margin-bottom:8px">Upcoming predictions</p>
+        ${pred.cycles.length ? pred.cycles.map(c => `
+          <div class="card-row" style="padding:8px 0;border-bottom:1px solid var(--hairline-soft)">
+            <span style="font-size:14px">🌹 ${fmtDate(c.start, { month: 'long', day: 'numeric' })}</span>
+            <span class="sub">ovulation ${fmtDate(c.ovulation)}</span>
+          </div>`).join('') : '<p class="sub">Log a period to unlock predictions.</p>'}
+      </div>
+
+      <h2 class="section-title stagger" style="--i:3">Patterns <span class="badge badge-plus">${ICONS.spark} Plus</span></h2>
+      <div class="stagger" style="--i:3">
+      ${premiumGate(`
+        <div class="card" style="margin-bottom:10px">
+          <p class="eyebrow" style="margin-bottom:8px">Most frequent symptoms</p>
+          ${symptomChart}
+        </div>
+        <div class="card">
+          <p class="eyebrow" style="margin-bottom:8px">${ttc ? 'Conception outlook' : 'Cycle health check'}</p>
+          <p style="font-size:14px;line-height:1.55">
+            ${cur ? `Today's pregnancy chance is <strong>${cur.chance.toLowerCase()}</strong>. ` : ''}
+            ${st.variability != null && st.variability <= 4
+              ? 'Your cycles are impressively regular — predictions should be reliable to within a day or two.'
+              : 'Your cycle length varies a bit; logging basal temperature tightens ovulation estimates.'}
+            ${ttc ? ' In TTC mode, aim for the 3 days before and including ovulation — they carry most of the monthly chance.' : ''}
+          </p>
+        </div>`, 'Symptom patterns & health analysis')}
+      </div>
+
+      <h2 class="section-title stagger" style="--i:4">Health report <span class="badge badge-plus">${ICONS.spark} Plus</span></h2>
+      <div class="card cream stagger" style="--i:4">
+        <p class="sub" style="margin-bottom:12px">A doctor-ready summary of your cycles, symptoms and patterns — handy for gynecologist visits.</p>
+        <button class="btn ${D.premium ? 'btn-primary' : 'btn-ghost'} btn-block" data-action="${D.premium ? 'export-report' : 'paywall'}">
+          ${D.premium ? 'Download report' : `${ICONS.lock}&nbsp; Unlock with Plus`}
+        </button>
+      </div>
+    `;
+  }
+
+  function exportReport() {
+    const st = Cycle.stats(D.periodDays, D.settings);
+    const pred = Cycle.predictions(D.periodDays, D.settings, 2);
+    const lines = [
+      'TANDEM — CYCLE HEALTH REPORT',
+      `Generated: ${new Date().toLocaleString()}`,
+      `Name: ${D.names.tracker || '—'}`,
+      '',
+      `Average cycle length : ${st.cycleLen} days`,
+      `Average period length: ${st.periodLen} days`,
+      `Cycle variability    : ${st.variability != null ? '±' + st.variability + ' days' : 'insufficient data'}`,
+      '',
+      'LOGGED PERIODS',
+      ...st.runs.map(r => `  ${r.start} → ${r.end}  (${r.len} days)`),
+      '',
+      'PREDICTIONS',
+      ...pred.cycles.map(c => `  Period ~${c.start}, ovulation ~${c.ovulation}, fertile ${c.fertileStart}–${c.fertileEnd}`),
+      '',
+      'DAILY LOGS',
+      ...Object.entries(D.logs).sort().map(([iso, l]) =>
+        `  ${iso}: ${[l.flow && 'flow ' + l.flow, l.symptoms.length && 'symptoms: ' + l.symptoms.join(', '), l.moods.length && 'mood: ' + l.moods.join(', '), l.bbt != null && 'BBT ' + l.bbt + '°C'].filter(Boolean).join(' · ') || '—'}`),
+    ];
+    download('tandem-report.txt', lines.join('\n'), 'text/plain');
+    toast('Report downloaded');
+  }
+
+  function download(name, content, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  // ---------------- PARTNER ----------------
+  function renderPartner() {
+    const cur = Cycle.current(D.periodDays, D.settings);
+    const isPartner = D.role === 'partner';
+    const trackerName = D.names.tracker || 'your partner';
+    const partnerName = D.names.partner || 'your partner';
+    const meta = cur ? PHASE_META[cur.phase] : PHASE_META.follicular;
+
+    let body = '';
+
+    if (!D.linked) {
+      body = `
+        <div class="card cream stagger" style="--i:1">
+          <p style="font-family:var(--serif);font-size:20px;margin-bottom:6px">Invite your partner</p>
+          <p class="sub">Tandem is built for two. Share this code so ${isPartner ? trackerName : partnerName} can follow along, get phase heads-ups, and send love notes.</p>
+          <div class="code-box">${D.inviteCode || ''}</div>
+          <button class="btn btn-primary btn-block" data-action="copy-code">Copy invite code</button>
+          <button class="btn btn-ghost btn-block mt8" data-action="simulate-link">I have a code — link now</button>
+        </div>`;
+    } else if (isPartner) {
+      // PARTNER VIEW — supportive coaching
+      const tips = cur ? TIPS[cur.phase].partner : TIPS.follicular.partner;
+      const gesture = GESTURES[new Date().getDate() % GESTURES.length];
+      body = `
+        <div class="card stagger" style="--i:1">
+          <p class="eyebrow" style="margin-bottom:6px">${esc(trackerName)} right now</p>
+          <p style="font-family:var(--serif);font-size:24px;letter-spacing:-.3px">${cur ? `${meta.emoji} ${cur.label}` : 'No data yet'}</p>
+          ${cur && cur.daysToPeriod != null && cur.daysToPeriod >= 0 && cur.phase !== 'menstrual' ? `<p class="sub mt8">Period expected in <strong style="color:var(--ink)">${cur.daysToPeriod} day${cur.daysToPeriod === 1 ? '' : 's'}</strong> — ${fmtDate(cur.next.start, { weekday: 'long', month: 'long', day: 'numeric' })}</p>` : ''}
+          ${cur && cur.phase === 'menstrual' ? `<p class="sub mt8">Day ${cur.cycleDay} — comfort mode: ON. 🫶</p>` : ''}
+        </div>
+
+        <div class="card cream stagger" style="--i:2">
+          <p class="eyebrow" style="margin-bottom:4px">How to be great this week</p>
+          <ul class="tip-list">
+            ${tips.map(([ico, t]) => `<li><span class="ico">${ico}</span><span>${esc(t)}</span></li>`).join('')}
+          </ul>
+        </div>
+
+        <div class="stagger" style="--i:3">
+        ${premiumGate(`
+          <div class="card">
+            <p class="eyebrow" style="margin-bottom:6px">Today's gesture</p>
+            <p style="font-family:var(--serif);font-size:18px">“${esc(gesture)}”</p>
+            <p class="sub mt8">Daily partner coaching, PMS early warnings and gift nudges — refreshed every morning.</p>
+          </div>`, 'Daily partner coaching')}
+        </div>`;
+    } else {
+      // TRACKER VIEW — what your partner sees + sharing controls
+      body = `
+        <div class="card stagger" style="--i:1">
+          <div class="card-row">
+            <div>
+              <p class="eyebrow" style="margin-bottom:4px">Linked with</p>
+              <p style="font-family:var(--serif);font-size:20px">💞 ${esc(partnerName)}</p>
+            </div>
+            <span class="badge badge-teal">Connected</span>
+          </div>
+          <p class="sub mt8">${esc(partnerName)} can see your current phase, upcoming period heads-up and supportive tips — never your notes or logs.</p>
+        </div>
+
+        <div class="card cream stagger" style="--i:2">
+          <p class="eyebrow" style="margin-bottom:6px">What ${esc(partnerName)} sees today</p>
+          <p style="font-size:15px">${cur ? `${meta.emoji} <strong>${cur.label}</strong>${cur.daysToPeriod != null && cur.daysToPeriod >= 0 && cur.phase !== 'menstrual' ? ` · period in ${cur.daysToPeriod}d` : ''}` : 'Nothing yet — log a period first.'}</p>
+          <p class="sub mt8">Plus supportive phase tips. Switch to the Partner view above to preview it.</p>
+        </div>`;
+    }
+
+    // love notes (both roles, when linked)
+    const me = D.role;
+    const notesHtml = D.notes.slice(-12).map(n => `
+      <div class="note-bubble ${n.from === me ? 'me' : 'them'}">
+        ${esc(n.text)}
+        <span class="who">${n.from === 'tracker' ? esc(D.names.tracker || 'Tracker') : esc(D.names.partner || 'Partner')} · ${new Date(n.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+      </div>`).join('');
+
+    $('#panel-partner').innerHTML = `
+      <div class="role-switch stagger" style="--i:0" role="tablist" aria-label="Who is looking?">
+        <button class="${!isPartner ? 'on' : ''}" data-role="tracker">🌸 ${esc(D.names.tracker || 'Tracker')}</button>
+        <button class="${isPartner ? 'on' : ''}" data-role="partner">💙 ${esc(D.names.partner || 'Partner')}</button>
+      </div>
+      ${body}
+      ${D.linked ? `
+      <h2 class="section-title stagger" style="--i:4">Love notes</h2>
+      <div class="card stagger" style="--i:4">
+        ${notesHtml || '<p class="sub">No notes yet — send the first one 💌</p>'}
+        <div class="note-compose">
+          <input type="text" id="note-input" placeholder="Send a little love…" maxlength="200" aria-label="Write a love note">
+          <button class="send-orb" data-action="send-note" aria-label="Send note">${ICONS.send}</button>
+        </div>
+      </div>` : ''}
+    `;
+  }
+
+  // ---------------- PAYWALL ----------------
+  let selectedPlan = 'yearly';
+  function renderPaywall() {
+    $('#paywall-body').innerHTML = `
+      <h3>Tandem <span style="color:var(--primary)">Plus</span></h3>
+      <p class="sub">Everything in the free app, plus the deep stuff — for both of you.</p>
+      <div>
+        ${[
+          'Symptom & mood pattern analysis',
+          'Doctor-ready health reports (export)',
+          'Basal temperature (BBT) tracking',
+          'PMS early-warning calendar shading',
+          'TTC mode with conception outlook',
+          'Daily partner coaching & gesture ideas',
+        ].map(f => `<div class="feature-check"><span class="tick">✓</span><span>${f}</span></div>`).join('')}
+      </div>
+      <hr class="sep">
+      <div class="plan-card ${selectedPlan === 'yearly' ? 'sel' : ''}" data-plan="yearly">
+        <span class="radio"></span>
+        <div><strong>Yearly</strong><br><span class="sub">7-day free trial · save 58%</span></div>
+        <div class="plan-price"><div class="p">$39.99</div><div class="per">$3.33 / month</div></div>
+      </div>
+      <div class="plan-card ${selectedPlan === 'monthly' ? 'sel' : ''}" data-plan="monthly">
+        <span class="radio"></span>
+        <div><strong>Monthly</strong><br><span class="sub">Flexible, cancel anytime</span></div>
+        <div class="plan-price"><div class="p">$7.99</div><div class="per">/ month</div></div>
+      </div>
+      <button class="btn btn-primary btn-block mt8" data-action="start-trial">Start 7-day free trial</button>
+      <p class="sub center mt8" style="font-size:12px">Demo app — no real payment. The button simply unlocks Plus.</p>
+    `;
+    openSheet('paywall');
+  }
+
+  // ---------------- SETTINGS ----------------
+  function renderSettings() {
+    const s = D.settings;
+    $('#settings-body').innerHTML = `
+      <h3>Settings</h3>
+      <div class="form-row"><label>Your name</label><input class="text" id="set-name" value="${esc(D.names.tracker)}" placeholder="e.g. Maya"></div>
+      <div class="form-row"><label>Partner's name</label><input class="text" id="set-pname" value="${esc(D.names.partner)}" placeholder="e.g. Sam"></div>
+      <div class="form-row"><label>Goal</label>
+        <select class="text" id="set-goal">
+          <option value="track" ${s.goal === 'track' ? 'selected' : ''}>Track my cycle</option>
+          <option value="ttc" ${s.goal === 'ttc' ? 'selected' : ''}>Trying to conceive (TTC)</option>
+          <option value="avoid" ${s.goal === 'avoid' ? 'selected' : ''}>Avoid pregnancy</option>
+        </select>
+      </div>
+      <div class="form-row"><label>Cycle length (days) — used until predictions learn from your logs</label><input class="text" id="set-cycle" type="number" min="15" max="60" value="${s.cycleLen}"></div>
+      <div class="form-row"><label>Period length (days)</label><input class="text" id="set-period" type="number" min="1" max="12" value="${s.periodLen}"></div>
+      <div class="form-row"><label>Luteal phase (days) — usually 14</label><input class="text" id="set-luteal" type="number" min="9" max="17" value="${s.luteal}"></div>
+      <div class="form-row"><label><input type="checkbox" id="set-motion" ${s.reduceMotion ? 'checked' : ''} style="width:auto;height:auto;margin-right:8px;vertical-align:-2px">Reduce motion (calms all animation)</label></div>
+      <button class="btn btn-primary btn-block" data-action="save-settings">Save settings</button>
+      <hr class="sep">
+      <button class="btn btn-ghost btn-block" data-action="view-sheet">View generated spritesheet 🎞️</button>
+      <button class="btn btn-ghost btn-block mt8" data-action="export-json">Export all data (JSON)</button>
+      <button class="btn btn-ghost btn-block mt8" data-action="load-sample">Load sample data</button>
+      <button class="btn btn-ghost btn-block mt8" style="color:var(--error)" data-action="erase">Erase everything</button>
+      ${D.premium ? `<button class="btn btn-ghost btn-block mt8" data-action="cancel-plus">Cancel Tandem Plus</button>` : ''}
+    `;
+    openSheet('settings');
+  }
+
+  function applyMotionPref() {
+    document.body.classList.toggle('reduce-motion', !!D.settings.reduceMotion);
+  }
+
+  // ---------------- ONBOARDING ----------------
+  function renderOnboarding() {
+    $('#onboard-body').innerHTML = `
+      <div class="center" style="padding-top:6px">
+        <span class="badge badge-voltage">Cycle tracking, together</span>
+        <h3 style="margin-top:10px">Welcome to Tandem</h3>
+        <p class="sub">One cycle, two people in the loop. Set up in 20 seconds.</p>
+      </div>
+      <div class="form-row"><label>Your name</label><input class="text" id="ob-name" placeholder="e.g. Maya"></div>
+      <div class="form-row"><label>Partner's name (optional)</label><input class="text" id="ob-pname" placeholder="e.g. Sam"></div>
+      <div class="form-row"><label>First day of your last period</label><input class="text" id="ob-last" type="date" max="${Cycle.todayISO()}"></div>
+      <div class="form-row"><label>Typical cycle length</label>
+        <select class="text" id="ob-cycle">${Array.from({ length: 26 }, (_, i) => 20 + i).map(n => `<option ${n === 28 ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      </div>
+      <button class="btn btn-primary btn-block" data-action="finish-onboarding">Start tracking</button>
+      <button class="btn btn-ghost btn-block mt8" data-action="onboard-sample">Just show me a demo with sample data</button>
+    `;
+    openSheet('onboard');
+  }
+
+  function finishOnboarding(useSample) {
+    Store.patch(d => {
+      d.onboarded = true;
+      d.inviteCode = 'LUNA-' + Math.floor(1000 + Math.random() * 9000);
+      if (!useSample) {
+        d.names.tracker = $('#ob-name').value.trim();
+        d.names.partner = $('#ob-pname').value.trim();
+        d.settings.cycleLen = parseInt($('#ob-cycle').value, 10) || 28;
+        const last = $('#ob-last').value;
+        if (last) for (let k = 0; k < d.settings.periodLen; k++) d.periodDays.push(Cycle.addDays(last, k));
+        d.periodDays.sort();
+      }
+    });
+    if (useSample) {
+      Store.sampleData();
+      Store.patch(d => { d.names.tracker = d.names.tracker || 'Maya'; d.names.partner = d.names.partner || 'Sam'; });
+    }
+    D = Store.get();
+    closeSheet('onboard');
+    switchTab('home');
+    toast(useSample ? 'Sample couple loaded — meet Maya & Sam 💞' : 'You’re all set 🌸');
+  }
+
+  // ---------------- global event delegation ----------------
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-tab],[data-action],[data-day],[data-logdate],[data-chip],[data-role],[data-plan]');
+    if (!t) return;
+
+    if (t.dataset.tab) { switchTab(t.dataset.tab); return; }
+    if (t.dataset.logdate) { logDate = t.dataset.logdate; renderLog(); return; }
+    if (t.dataset.day && !t.dataset.action) { openDaySheet(t.dataset.day); return; }
+    if (t.dataset.role) { Store.patch(d => d.role = t.dataset.role); D = Store.get(); renderPartner(); return; }
+    if (t.dataset.plan) { selectedPlan = t.dataset.plan; renderPaywall(); return; }
+
+    if (t.dataset.chip) {
+      const { chip, val } = t.dataset;
+      mutateLog(l => {
+        if (chip === 'flow') l.flow = l.flow === val ? null : val;
+        else if (chip === 'sex') l.sex = l.sex === val ? null : val;
+        else if (chip === 'symptom') l.symptoms = l.symptoms.includes(val) ? l.symptoms.filter(x => x !== val) : [...l.symptoms, val];
+        else if (chip === 'mood') l.moods = l.moods.includes(val) ? l.moods.filter(x => x !== val) : [...l.moods, val];
+      });
+      return;
+    }
+
+    switch (t.dataset.action) {
+      case 'open-settings': renderSettings(); break;
+      case 'paywall': renderPaywall(); break;
+      case 'close-sheet': closeAllSheets(); break;
+
+      case 'quick-period': {
+        Store.togglePeriodDay(Cycle.todayISO());
+        D = Store.get();
+        rerender();
+        toast(new Set(D.periodDays).has(Cycle.todayISO()) ? 'Period logged for today 🌹' : 'Removed today’s period mark');
+        break;
+      }
+      case 'goto-log': switchTab('log'); break;
+      case 'goto-calendar': switchTab('calendar'); break;
+
+      case 'cal-prev': calCursor.setMonth(calCursor.getMonth() - 1); renderCalendar(); break;
+      case 'cal-next': calCursor.setMonth(calCursor.getMonth() + 1); renderCalendar(); break;
+      case 'toggle-period': {
+        Store.togglePeriodDay(t.dataset.day);
+        D = Store.get();
+        closeAllSheets();
+        renderCalendar();
+        toast('Calendar updated');
+        break;
+      }
+      case 'open-log-day': logDate = t.dataset.day; closeAllSheets(); switchTab('log'); break;
+
+      case 'water': mutateLog(l => l.water = Math.max(0, (l.water || 0) + Number(t.dataset.d))); break;
+      case 'sleep': mutateLog(l => l.sleep = Math.max(0, Math.round(((l.sleep == null ? 7 : l.sleep) + Number(t.dataset.d)) * 2) / 2)); break;
+      case 'bbt': mutateLog(l => l.bbt = Math.round(((l.bbt == null ? 36.5 : l.bbt) + Number(t.dataset.d)) * 100) / 100); break;
+      case 'save-notes': mutateLog(l => l.notes = $('#log-notes').value); toast('Log saved 💾'); break;
+
+      case 'export-report': exportReport(); break;
+      case 'export-json': download('tandem-data.json', JSON.stringify(Store.get(), null, 2), 'application/json'); toast('Data exported'); break;
+
+      case 'copy-code': {
+        const code = D.inviteCode || '';
+        (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(
+          () => toast('Code copied — send it to your person 💌'),
+          () => toast('Code: ' + code)
+        );
+        break;
+      }
+      case 'simulate-link': Store.patch(d => d.linked = true); D = Store.get(); renderPartner(); toast('Linked! You’re in tandem now 💞'); break;
+      case 'send-note': {
+        const input = $('#note-input');
+        const text = input.value.trim();
+        if (!text) break;
+        Store.patch(d => d.notes.push({ from: d.role, text, at: Date.now() }));
+        D = Store.get();
+        renderPartner();
+        toast('Note sent 💌');
+        break;
+      }
+
+      case 'start-trial': {
+        Store.patch(d => { d.premium = true; d.trialEndsAt = Date.now() + 7 * 86400000; });
+        D = Store.get();
+        closeAllSheets();
+        rerender();
+        toast('Welcome to Tandem Plus ✦ trial started');
+        break;
+      }
+      case 'cancel-plus': Store.patch(d => { d.premium = false; d.trialEndsAt = null; }); D = Store.get(); closeAllSheets(); rerender(); toast('Plus canceled'); break;
+
+      case 'save-settings': {
+        Store.patch(d => {
+          d.names.tracker = $('#set-name').value.trim();
+          d.names.partner = $('#set-pname').value.trim();
+          d.settings.goal = $('#set-goal').value;
+          d.settings.cycleLen = Math.min(60, Math.max(15, parseInt($('#set-cycle').value, 10) || 28));
+          d.settings.periodLen = Math.min(12, Math.max(1, parseInt($('#set-period').value, 10) || 5));
+          d.settings.luteal = Math.min(17, Math.max(9, parseInt($('#set-luteal').value, 10) || 14));
+          d.settings.reduceMotion = $('#set-motion').checked;
+        });
+        D = Store.get();
+        applyMotionPref();
+        closeAllSheets();
+        rerender();
+        toast('Settings saved');
+        break;
+      }
+      case 'view-sheet': {
+        const cur = Cycle.current(D.periodDays, D.settings);
+        $('#sheet-view').innerHTML = `
+          <h3>Generated spritesheet</h3>
+          <p class="sub">64 frames, drawn entirely in code at load time — this exact sheet powers the beating womb-heart on Home.</p>
+          <img alt="8 by 8 spritesheet of the womb heart animation" src="${WombSprite.getSheetDataURL(cur ? cur.phase : 'follicular')}">
+        `;
+        closeSheet('settings');
+        openSheet('sheetviewer');
+        break;
+      }
+      case 'load-sample': Store.sampleData(); Store.patch(d => { d.names.tracker = d.names.tracker || 'Maya'; d.names.partner = d.names.partner || 'Sam'; }); D = Store.get(); closeAllSheets(); rerender(); toast('Sample data loaded'); break;
+      case 'erase': {
+        if (confirm('Erase all Tandem data on this device?')) {
+          Store.reset(); D = Store.get(); closeAllSheets(); renderOnboarding();
+        }
+        break;
+      }
+      case 'finish-onboarding': finishOnboarding(false); break;
+      case 'onboard-sample': finishOnboarding(true); break;
+    }
+  });
+
+  // close sheets when tapping the scrim itself
+  $$('.scrim').forEach(s => s.addEventListener('click', e => { if (e.target === s) s.classList.remove('open'); }));
+
+  // ---------------- boot ----------------
+  function boot() {
+    D = Store.load();
+    applyMotionPref();
+    // generated favicon
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.href = WombSprite.favicon();
+    document.head.appendChild(link);
+
+    switchTab('home');
+    if (!D.onboarded) renderOnboarding();
+  }
+
+  boot();
+})();
+
+  </script>
+</body>
+</html>

@@ -601,9 +601,12 @@
       <div class="form-row"><label>${t('set.cycleLen')}</label><input class="text" id="set-cycle" type="number" min="15" max="60" value="${s.cycleLen}"></div>
       <div class="form-row"><label>${t('set.periodLen')}</label><input class="text" id="set-period" type="number" min="1" max="12" value="${s.periodLen}"></div>
       <div class="form-row"><label>${t('set.luteal')}</label><input class="text" id="set-luteal" type="number" min="9" max="17" value="${s.luteal}"></div>
+      <div class="form-row"><label><input type="checkbox" id="set-reminders" ${s.reminders ? 'checked' : ''} style="width:auto;height:auto;margin-right:8px;vertical-align:-2px">${t('set.reminders')}</label></div>
       <div class="form-row"><label><input type="checkbox" id="set-motion" ${s.reduceMotion ? 'checked' : ''} style="width:auto;height:auto;margin-right:8px;vertical-align:-2px">${t('set.reduceMotion')}</label></div>
       <button class="btn btn-primary btn-block" data-action="save-settings">${t('set.save')}</button>
       <hr class="sep">
+      ${window.__installPrompt ? `<button class="btn btn-ghost btn-block" style="margin-bottom:8px" data-action="install-app">${t('set.install')}</button>` : ''}
+      <button class="btn btn-ghost btn-block" style="margin-bottom:8px" data-action="open-glance">${t('set.glance')}</button>
       <button class="btn btn-ghost btn-block" data-action="view-sheet">${t('set.viewSheet')}</button>
       <button class="btn btn-ghost btn-block mt8" data-action="export-json">${t('set.export')}</button>
       <button class="btn btn-ghost btn-block mt8" data-action="load-sample">${t('set.sample')}</button>
@@ -615,6 +618,26 @@
 
   function applyMotionPref() {
     document.body.classList.toggle('reduce-motion', !!D.settings.reduceMotion);
+  }
+
+  // ---------------- micro-interactions ----------------
+  const buzz = pattern => { try { navigator.vibrate && navigator.vibrate(pattern); } catch (e) { /* unsupported */ } };
+
+  function burstHearts(x, y) {
+    if (document.body.classList.contains('reduce-motion') || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    for (let i = 0; i < 10; i++) {
+      const s = document.createElement('span');
+      s.className = 'burst-heart';
+      s.textContent = '♥';
+      s.style.left = x + 'px';
+      s.style.top = y + 'px';
+      document.body.appendChild(s);
+      const a = Math.random() * 2 - 1;
+      s.animate([
+        { transform: 'translate(-50%,-50%) scale(.4)', opacity: 1 },
+        { transform: `translate(calc(-50% + ${a * 76}px), calc(-50% - ${58 + Math.random() * 74}px)) scale(${0.8 + Math.random() * 0.7}) rotate(${a * 42}deg)`, opacity: 0 },
+      ], { duration: 700 + Math.random() * 300, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => s.remove();
+    }
   }
 
   // ---------------- ONBOARDING ----------------
@@ -672,6 +695,7 @@
     if (el.dataset.plan) { selectedPlan = el.dataset.plan; renderPaywall(); return; }
 
     if (el.dataset.chip) {
+      buzz(8);
       const { chip, val } = el.dataset;
       mutateLog(l => {
         if (chip === 'flow') l.flow = l.flow === val ? null : val;
@@ -688,10 +712,14 @@
       case 'close-sheet': closeAllSheets(); break;
 
       case 'quick-period': {
+        const wasOff = !new Set(D.periodDays).has(Cycle.todayISO());
+        const rect = el.getBoundingClientRect();
         Store.togglePeriodDay(Cycle.todayISO());
         D = Store.get();
         rerender();
-        toast(new Set(D.periodDays).has(Cycle.todayISO()) ? t('toast.periodOn') : t('toast.periodOff'));
+        if (wasOff) { burstHearts(rect.left + rect.width / 2, rect.top + rect.height / 2); buzz([10, 30, 10]); }
+        toast(wasOff ? t('toast.periodOn') : t('toast.periodOff'));
+        Notify.check(D);
         break;
       }
       case 'goto-log': switchTab('log'); break;
@@ -748,6 +776,7 @@
       case 'cancel-plus': Store.patch(d => { d.premium = false; d.trialEndsAt = null; }); D = Store.get(); closeAllSheets(); rerender(); toast(t('toast.plusOff')); break;
 
       case 'save-settings': {
+        const wantReminders = $('#set-reminders').checked;
         Store.patch(d => {
           d.settings.lang = $('#set-lang').value;
           d.names.tracker = $('#set-name').value.trim();
@@ -757,15 +786,30 @@
           d.settings.periodLen = Math.min(12, Math.max(1, parseInt($('#set-period').value, 10) || 5));
           d.settings.luteal = Math.min(17, Math.max(9, parseInt($('#set-luteal').value, 10) || 14));
           d.settings.reduceMotion = $('#set-motion').checked;
+          d.settings.reminders = wantReminders;
         });
         D = Store.get();
         applyLang();
         applyMotionPref();
         closeAllSheets();
         rerender();
-        toast(t('toast.settingsSaved'));
+        if (wantReminders && Notify.supported() && Notification.permission !== 'granted') {
+          Notify.enable().then(p => {
+            if (p === 'granted') { toast(t('toast.remindOn')); Notify.check(D); }
+            else { Store.patch(d => d.settings.reminders = false); D = Store.get(); toast(t('toast.remindDenied')); }
+          });
+        } else {
+          toast(t('toast.settingsSaved'));
+          Notify.check(D);
+        }
         break;
       }
+      case 'install-app': {
+        const p = window.__installPrompt;
+        if (p) { p.prompt(); window.__installPrompt = null; closeAllSheets(); }
+        break;
+      }
+      case 'open-glance': location.href = 'glance.html'; break;
       case 'view-sheet': {
         const cur = Cycle.current(D.periodDays, D.settings);
         $('#sheet-view').innerHTML = `
@@ -809,6 +853,19 @@
     link.rel = 'icon';
     link.href = WombSprite.favicon();
     document.head.appendChild(link);
+
+    // PWA: service worker (https/localhost only; no-op for file://)
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+    // PWA: capture the install prompt so Settings can offer "Install app"
+    window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); window.__installPrompt = e; });
+
+    // reminders + app badge: on boot and whenever the app returns to view
+    Notify.check(D);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') { D = Store.get(); Notify.check(D); }
+    });
 
     switchTab('home');
     if (!D.onboarded) renderOnboarding();

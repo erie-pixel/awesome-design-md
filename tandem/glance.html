@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf9f5">
+  <title>Tandem Glance</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      background: #faf9f5; color: #141413;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: grid; place-items: center;
+      -webkit-font-smoothing: antialiased;
+      cursor: pointer;
+    }
+    .wrap { text-align: center; padding: 12px; animation: pop .5s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+    canvas { width: min(46vmin, 190px); height: min(46vmin, 190px); display: block; margin: 0 auto; }
+    .phase { font-family: Georgia, "Times New Roman", serif; font-size: clamp(18px, 6.5vmin, 27px); letter-spacing: -0.3px; margin-top: 2px; }
+    .dday { font-size: clamp(30px, 11vmin, 46px); font-weight: 700; letter-spacing: -1px; color: #ff385c; line-height: 1.1; }
+    .sub { font-size: clamp(11px, 3.6vmin, 14px); color: #6c6a64; margin-top: 4px; }
+    .empty { font-size: 15px; color: #6c6a64; padding: 24px; }
+    @media (prefers-reduced-motion: reduce) { .wrap { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="wrap"></div>
+  <script src="js/cycle.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/sprite.js"></script>
+  <script>
+    (() => {
+      let data = null;
+      try { data = JSON.parse(localStorage.getItem('tandem.v1')); } catch (e) { /* no data */ }
+      const wrap = document.getElementById('wrap');
+
+      if (!data || !data.onboarded) {
+        wrap.innerHTML = '<div class="empty">Tandem — open the app to start · 앱을 먼저 열어주세요</div>';
+      } else {
+        I18N.setLang(data.settings.lang || I18N.detect());
+        document.documentElement.lang = I18N.getLang();
+        const cur = Cycle.current(data.periodDays, data.settings);
+        if (!cur) {
+          wrap.innerHTML = `<div class="empty">${t('home.logToStart')}</div>`;
+        } else {
+          const dday = cur.phase === 'menstrual'
+            ? t('home.cycleDayN', { n: cur.cycleDay })
+            : (cur.daysToPeriod === 0 ? 'D-DAY' : 'D-' + cur.daysToPeriod);
+          const nextStr = cur.next
+            ? Cycle.parse(cur.next.start).toLocaleDateString(I18N.locale(), { month: 'long', day: 'numeric', weekday: 'short' })
+            : '';
+          wrap.innerHTML = `
+            <canvas id="hc" width="380" height="380" aria-label="cycle heart"></canvas>
+            <div class="phase">${t('phase.' + cur.phase)}</div>
+            <div class="dday">${dday}</div>
+            <div class="sub">${nextStr}</div>`;
+          const canvas = document.getElementById('hc');
+          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (reduced) {
+            WombSprite.renderStatic(canvas, cur.phase, 0.16);
+          } else {
+            // lightweight live beat, time-based
+            const start = performance.now();
+            const bpm = (WombSprite.PALETTES[cur.phase] || {}).bpm || 1;
+            const periodMs = 2400 / bpm;
+            (function step(now) {
+              WombSprite.renderStatic(canvas, cur.phase, ((now - start) % periodMs) / periodMs);
+              requestAnimationFrame(step);
+            })(start);
+          }
+        }
+      }
+      document.body.addEventListener('click', () => { location.href = './'; });
+    })();
+  </script>
+</body>
+</html>

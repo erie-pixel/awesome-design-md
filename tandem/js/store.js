@@ -13,7 +13,7 @@ const Store = (() => {
     linked: false,
     inviteCode: null,
     names: { tracker: '', partner: '' },
-    settings: { cycleLen: 28, periodLen: 5, luteal: 14, reduceMotion: false, goal: 'track' }, // goal: track | ttc | avoid
+    settings: { cycleLen: 28, periodLen: 5, luteal: 14, reduceMotion: false, goal: 'track', lang: null }, // goal: track | ttc | avoid; lang: 'en' | 'ko' (null = auto-detect)
     periodDays: [],        // ['YYYY-MM-DD', ...]
     logs: {},              // { iso: { flow, symptoms[], moods[], sex, energy, water, sleep, bbt, notes } }
     notes: [],             // love notes: { from: 'tracker'|'partner', text, at }

@@ -1,5 +1,5 @@
 /* Tandem service worker — offline cache + notification click */
-const CACHE = 'tandem-v1';
+const CACHE = 'tandem-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -29,10 +29,23 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Cache-first for same-origin GETs, refresh cache in the background
+// Pages (navigations): network-first so a deploy shows up on the very
+// next visit; cache only as offline fallback.
+// Assets: cache-first with background refresh.
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+        return res;
+      }).catch(() => caches.match(e.request).then(c => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then(cached => {
       const fresh = fetch(e.request).then(res => {

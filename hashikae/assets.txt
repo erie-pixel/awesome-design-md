@@ -2,6 +2,8 @@ banners/ev_2026_autumn.png
 banners/standard.png
 figs/cat.png
 guide/cat.png
+home/play.png
+home/store.png
 icon/icon-192.png
 icon/icon-512.png
 icon/manifest.webmanifest

@@ -8,8 +8,11 @@
 
 원본은 `../../../art-src/`. 변환: `node tools/to-webp.js <src> <out.webp> <maxW> <maxH> <trim> [q]`
 
+버튼 PNG는 **누르는 동안만** 배경 위에 떠오른다(평소엔 배경 그림만).
+
 **배경을 바꾸면** 버튼 좌표를 다시 맞춰야 한다:
 1. `src/ui/menu.js`의 `BG = { w, h }`를 새 배경 크기로
-2. `tools/home-calibrate.html`을 열어 `?play=left,top,width&store=...&op=0.6`으로 눈으로 맞춘다(390×780 기준)
-3. 세로값만 스테이지 기준으로 환산: `top_stage% = top_screen% × 780 / (H × 390 / W)`
+2. `NODE_PATH=… node tools/home-fit.js public/assets/home/bg.webp public/assets/home/play.webp <left> <top> <width> 4` 로 자동 탐색
+   (결과 best가 스테이지 % — 그대로 쓴다). 눈으로 확인하려면 `tools/home-calibrate.html`
+3. (수동 측정 시에만) 세로값 환산: `top_stage% = top_screen% × 780 / (H × 390 / W)`
 4. `src/shell.html`의 `.hm-spot.play` / `.hm-spot.store`에 반영

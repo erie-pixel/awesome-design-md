@@ -3,8 +3,8 @@ banners/standard.png
 figs/cat.png
 guide/cat.png
 home/bg.webp
-home/play.webp
-home/store.webp
 icon/icon-192.png
 icon/icon-512.png
 icon/manifest.webmanifest
+world/bd_arcade.webp
+world/bd_shop.webp

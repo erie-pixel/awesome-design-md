@@ -7,8 +7,8 @@
 #   machine_deco.glb   이웃 기계 0.68×0.50×1.60 — 재질 이름이 tint로 시작하면 코드가 색을 칠한다
 # 있으면 임시 도형을 숨기고 세운다(ui/chibi.js·scenes/shop.js swapModel)
 #
-# ---- 홈 3D(v78, scenes/home3d.js) — 미터 그대로(scale 1), 원점 = 발자국 중심·바닥, +Y 위
-#   home_landscape.glb 섬 지형 28×30m(높이 0.87): 광장 타일·잔디·연못·건물 패드 테두리(sidewalk_edges)·분수 패드 — 있으면 3D 홈 활성
-#   home_house.glb 5.8×4.4 h6.2 · home_shop.glb 5.0×4.5 h6.7 · home_arcade.glb 9.4×6.2 h9.0(간판 emissive) — 자리 locations.js m3d.at
-#   prop_tree|tree_b|conifer|lamp|bench|barrel|bridge|statue.glb — data/props.js 좌표에 복제(치수 PROP_TYPES)
-#   검사: tools/glb-inspect-entry.js(esbuild 번들 → 헤드리스, bbox·삼각형·재질·미리보기)
+# ---- 홈 3D(v80, scenes/home3d.js) — 2× 세계, +Y 위, 원점 = 발자국 중심·바닥
+#   home_landscape_decorated_2x.glb 섬 지형 56×60m(소품·가로등 8·벤치·다리·분수 구워짐) — 있으면 3D 홈 활성. 가로등 전구 재질 bulb.NNN → 밤 점등
+#   home_arcade_reference.glb 18.8×12.4 h18 · home_house_reference.glb 11.6×8.8 h12.4 (2× 크기, 배율 1) — 자리 locations.js m3d.at
+#   home_shop.glb 5×4.5 h6.7 · event_booth.glb 3×2.5 h3.8 (1× → 코드가 2배) — 2× 참조 모델(home_shop_reference.glb)이 오면 자동 교체
+#   옛 1× 지형·건물·소품 12개는 art-src/models/legacy/ (배포 제외). 검사: tools/glb-inspect-entry.js

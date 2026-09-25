@@ -14,6 +14,7 @@
 
 import { INDEX_PATH, META_PATH, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf } from './core.js';
 import { waitFor } from './limits.js';
+import { t } from './i18n.js';
 
 const MEDIA_CACHE = 'moa-media-v1';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -81,7 +82,7 @@ export class Repo {
         });
       } catch (e) {
         if (attempt < 3) { await sleep(800 * 2 ** attempt); continue; }
-        throw new GitHubError(0, '네트워크에 연결할 수 없어요');
+        throw new GitHubError(0, t('gh.network'));
       }
       if (res.ok) {
         if (as === 'blob') return res.blob();
@@ -107,10 +108,10 @@ export class Repo {
       }
       if (res.status >= 500 && attempt < 3) { await sleep(1000 * 2 ** attempt); continue; }
       if (res.status === 409 && /empty/i.test(msg)) throw new GitHubError(409, msg, { empty: true });
-      if (res.status === 401) throw new GitHubError(401, '토큰이 올바르지 않거나 만료되었어요');
-      if (res.status === 403 && !limited) throw new GitHubError(403, '이 저장소에 쓸 권한이 없어요 (토큰 권한: Contents 읽기/쓰기 확인)');
-      if (res.status === 404) throw new GitHubError(404, '저장소를 찾을 수 없어요 (이름과 토큰 접근 범위를 확인하세요)');
-      throw new GitHubError(res.status, msg || `GitHub 오류 ${res.status}`);
+      if (res.status === 401) throw new GitHubError(401, t('gh.401'));
+      if (res.status === 403 && !limited) throw new GitHubError(403, t('gh.403'));
+      if (res.status === 404) throw new GitHubError(404, t('gh.404'));
+      throw new GitHubError(res.status, msg || t('gh.other', { s: res.status }));
     }
   }
 
@@ -250,7 +251,7 @@ export class Repo {
         await sleep(300 + Math.random() * 700 * (attempt + 1)); // someone else committed first
       }
     }
-    throw new GitHubError(409, '다른 사람의 변경과 계속 충돌해요. 잠시 후 다시 시도하세요');
+    throw new GitHubError(409, t('gh.conflict'));
   }
 
   // ---------- media with local cache ----------
@@ -271,7 +272,7 @@ export class Repo {
     this._inflight++;
     try {
       const b = await this.file(path);
-      if (!b) throw new GitHubError(404, '파일이 없어요: ' + path);
+      if (!b) throw new GitHubError(404, t('gh.missing', { p: path }));
       if (c) c.put(this.cacheKey(path), new Response(b)).catch(() => {});
       return b;
     } finally {
@@ -313,7 +314,7 @@ export class Account {
 
   /** A new private repository for an album, tagged so it can be found again. */
   async createAlbumRepo(name, title) {
-    const r = await this.req('POST', '/user/repos', { body: { name, description: `${title} — Moa 공유앨범`, private: true, has_issues: false, has_projects: false, has_wiki: false } });
+    const r = await this.req('POST', '/user/repos', { body: { name, description: `${title} · Moa`, private: true, has_issues: false, has_projects: false, has_wiki: false } });
     await this.req('PUT', `/repos/${r.owner.login}/${r.name}/topics`, { body: { names: [ALBUM_TOPIC] } }).catch(() => {});
     return r;
   }

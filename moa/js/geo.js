@@ -5,9 +5,10 @@
    ============================================================ */
 
 import { placeFromNominatim } from './core.js';
+import { lang as appLang } from './i18n.js';
 
 const BASE = 'https://nominatim.openstreetmap.org';
-const CACHE_KEY = 'moa.geo.v1';
+const CACHE_KEY = 'moa.geo.v2';
 let cache = {};
 try { cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch { cache = {}; }
 
@@ -29,10 +30,10 @@ function save() {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch { /* quota */ }
 }
 
-const lang = () => (navigator.language || 'ko').startsWith('ko') ? 'ko,en' : `${navigator.language},en`;
+const lang = () => (appLang() === 'ko' ? 'ko,en' : 'en');
 
 export async function reverseGeocode(lat, lng) {
-  const k = `${lat.toFixed(3)},${lng.toFixed(3)}`;
+  const k = `${lang()}:${lat.toFixed(3)},${lng.toFixed(3)}`;
   if (k in cache) return cache[k];
   const place = await throttled(async () => {
     const r = await fetch(`${BASE}/reverse?format=jsonv2&addressdetails=1&zoom=16&lat=${lat}&lon=${lng}&accept-language=${lang()}`);

@@ -21,6 +21,7 @@
 | **태그** | 사진 정보 창이나 여러 장 선택해서 태그 달기. 태그별 보기, 태그 칩으로 필터, 검색(태그·장소·설명·올린 사람) |
 | **공유앨범** | 친구를 저장소 협업자로 초대하면 같은 보관함을 함께 채워요. 앨범 만들기, 좋아요, 댓글, 설명, 날짜·장소 직접 수정 |
 | **동시 편집** | 모든 변경은 작은 "작업(op)"으로 기록되고, 커밋 직전에 최신 앨범 정보 위에 다시 적용돼요. 두 사람이 동시에 저장해도 서로 덮어쓰지 않아요 |
+| **언어** | 기본 영어, **Settings → Language**에서 한국어로 전환 (기기에 저장) |
 | **용량·제한 표시** | GitHub 저장소 한도 기준으로 남은 용량(10GB 중), 이번 업로드 예상 크기, 파일·폴더·저장 속도 한도 상태를 보여주고, 넘기 전에 경고해요 |
 
 ## 쓰는 사람: 로그인만 하면 끝
@@ -143,4 +144,20 @@ e2e 테스트는 실제 `/api/auth/*` 함수를 가짜 github.com 로그인 화�
 | `js/app.js` | UI: 보관함(날짜·장소·지도·태그), 앨범, 공유·설정, 뷰어, 업로드 |
 | `vendor/` | [exifr](https://github.com/MikeKovarik/exifr) (MIT), [Leaflet](https://leafletjs.com) (BSD-2) |
 
-디자인은 [`design-md/apple/DESIGN.md`](../design-md/apple/DESIGN.md)의 사진 중심 언어(흰/파치먼트 캔버스, SF 타이포, Action Blue 하나, 알약 버튼)를 따르고, 다크 모드를 지원해요. 움직임과 손맛은 [Emil Kowalski의 디자인 엔지니어링 원칙](https://github.com/emilkowalski/skill)을 따랐어요: 썸네일에서 사진이 커지는 확대 전환, 손가락을 따라오다 살짝 튕기면 닫히는 뷰어·시트, 모든 버튼의 눌림 반응, 마우스에서만 켜지는 hover, 커스텀 easing(들어올 땐 drawer 곡선, 나갈 땐 더 빠르게), transform/opacity만 쓰는 애니메이션, 줄인 모션 설정 존중.
+글꼴은 [Pretendard Variable](https://github.com/orioncactus/pretendard)(SIL OFL 1.1, `vendor/pretendard/LICENSE.txt`)을 저장소에 포함해 쓰고, 필요한 글자 조각만 내려받아요. 움직임과 손맛은 [Emil Kowalski의 디자인 엔지니어링 원칙](https://github.com/emilkowalski/skill)을 따랐어요.
+
+Apple, iPhone, Live Photos는 Apple Inc.의 상표이고, GitHub은 GitHub, Inc.의 상표예요. Moa는 이들과 관계가 없어요. 지도 데이터 © OpenStreetMap contributors (ODbL).
+
+## 상업화하려면
+
+지금 구조 그대로는 **개인·비상업용**으로 쓰는 게 안전해요. 유료 서비스나 회사 제품으로 내려면 아래를 먼저 바꿔야 해요 (법률 자문 아님).
+
+| 항목 | 문제 | 필요한 조치 |
+|---|---|---|
+| GitHub 약관 | Acceptable Use Policies는 서비스나 서비스 접근을 허락 없이 "재판매·상업적으로 이용"하는 것을 금지하고, 인프라에 부담을 주는 저장소는 제한할 수 있다고 해요. Git은 백업·미디어 저장용이 아니라는 안내도 있어요 | GitHub에서 서면 허가를 받거나, 사진은 S3·Cloudflare R2 같은 자체 저장소로 옮기고 GitHub는 선택형 내보내기로 |
+| OSM 지도 타일·Nominatim | 공개 서버는 SLA가 없고 상업 서비스는 언제든 차단될 수 있어요. Nominatim은 **앱 전체 합산** 초당 1회 제한이고 개인정보 전송을 삼가라고 해요 | 상용 지도·지오코딩(Kakao/Naver 지도, MapTiler, Stadia, OpenCage 등)으로 교체, ODbL 표기는 유지 |
+| Vercel Hobby | 비상업 개인용만 허용 | 과금·광고 전 Pro 플랜으로 |
+| 개인정보 보호법 | 개인정보 처리방침, 해외 이전(GitHub·Vercel·지오코더) 고지, 보호책임자 | 약관·처리방침 작성 |
+| 위치정보법 | 사진 GPS를 처리하는 게 개인위치정보에 해당하면 위치기반서비스사업 신고(소상공인은 시작 후 1개월 내)와 위치 약관·동의가 필요할 수 있어요 | 변호사 확인 |
+| 이름 "Moa" | 흔한 단어라 겹치는 상표가 있을 수 있어요 | KIPRIS 상표 검색 |
+| 라이선스 | exifr(MIT)·Leaflet(BSD-2)·Pretendard(OFL)는 상업 이용 가능, 고지만 유지 | 없음 (글꼴 단독 판매, 수정본에 "Pretendard" 이름 사용만 금지) |

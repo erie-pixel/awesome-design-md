@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Moa — GitHub 저장소에 담는 친구들과의 공유앨범. 라이브 포토, 날짜·장소별 보기, 태그.">
-  <title>Moa — 공유앨범</title>
+  <meta name="description" content="Moa — shared photo albums stored in your private GitHub repositories.">
+  <title>Moa — shared albums</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -15,6 +15,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Moa">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="stylesheet" href="vendor/pretendard/pretendardvariable-dynamic-subset.css">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -26,16 +27,16 @@
 
     <div id="shell" hidden>
       <header class="bar">
-        <button class="space-btn" id="spaceBtn" aria-label="앨범 저장소 바꾸기">
+        <button class="space-btn" id="spaceBtn" data-i18n-aria="aria.switchAlbum" aria-label="Switch album">
           <span class="logo" aria-hidden="true"></span>
           <span id="spaceName">Moa</span>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <div class="bar-actions">
           <span class="sync" id="sync" hidden></span>
-          <button class="icon-btn" id="searchBtn" aria-label="검색"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
-          <button class="text-btn" id="selectBtn">선택</button>
-          <button class="btn btn-primary btn-sm" id="uploadBtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>업로드</span></button>
+          <button class="icon-btn" id="searchBtn" data-i18n-aria="aria.search" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+          <button class="text-btn" id="selectBtn">Select</button>
+          <button class="btn btn-primary btn-sm" id="uploadBtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="up.go">Upload</span></button>
         </div>
       </header>
 
@@ -44,14 +45,14 @@
           <div class="hero" id="hero"></div>
           <div class="toolbar" id="toolbar">
             <div class="search-row" id="searchRow" hidden>
-              <input type="search" id="searchInput" placeholder="태그, 장소, 설명, 올린 사람 검색" autocomplete="off" enterkeyhint="search">
+              <input type="search" id="searchInput" data-i18n-ph="search.ph" placeholder="Search" autocomplete="off" enterkeyhint="search">
             </div>
             <div class="seg" id="viewSeg" role="tablist">
               <span class="seg-thumb" id="segThumb" aria-hidden="true"></span>
-              <button data-view="date" role="tab">날짜</button>
-              <button data-view="place" role="tab">장소</button>
-              <button data-view="map" role="tab">지도</button>
-              <button data-view="tag" role="tab">태그</button>
+              <button data-view="date" role="tab" data-i18n="view.date">Date</button>
+              <button data-view="place" role="tab" data-i18n="view.place">Places</button>
+              <button data-view="map" role="tab" data-i18n="view.map">Map</button>
+              <button data-view="tag" role="tab" data-i18n="view.tag">Tags</button>
             </div>
             <div class="controls" id="controls"></div>
             <div class="chips" id="chips"></div>
@@ -66,19 +67,19 @@
       <nav class="tabbar" id="tabbar">
         <div class="tabs">
         <span class="tab-thumb" id="tabThumb" aria-hidden="true"></span>
-        <button data-tab="photos" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg><span>보관함</span></button>
-        <button data-tab="albums"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="6" width="15" height="15" rx="2.5"/><path d="M7 3h11.5A2.5 2.5 0 0 1 21 5.5V17"/></svg><span>앨범</span></button>
-        <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17.5" cy="9" r="2.6"/><path d="M17.5 14.3c2.3.2 3.7 1.8 4 4.2"/></svg><span>공유·설정</span></button>
+        <button data-tab="photos" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg><span data-i18n="tab.library">Library</span></button>
+        <button data-tab="albums"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="6" width="15" height="15" rx="2.5"/><path d="M7 3h11.5A2.5 2.5 0 0 1 21 5.5V17"/></svg><span data-i18n="tab.albums">Albums</span></button>
+        <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17.5" cy="9" r="2.6"/><path d="M17.5 14.3c2.3.2 3.7 1.8 4 4.2"/></svg><span data-i18n="tab.settings">Settings</span></button>
         </div>
-        <button class="fab" id="uploadFab" aria-label="업로드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="fab" id="uploadFab" data-i18n-aria="up.go" aria-label="Upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </nav>
 
       <div class="select-bar" id="selectBar" hidden>
-        <span id="selCount">0개 선택</span>
+        <span id="selCount"></span>
         <div>
-          <button class="text-btn" data-sel="tag">태그</button>
-          <button class="text-btn" data-sel="album">앨범에 추가</button>
-          <button class="text-btn danger" data-sel="delete">삭제</button>
+          <button class="text-btn" data-sel="tag" data-i18n="view.tag">Tags</button>
+          <button class="text-btn" data-sel="album" data-i18n="pick.title">Add to album</button>
+          <button class="text-btn danger" data-sel="delete" data-i18n="common.delete">Delete</button>
         </div>
       </div>
     </div>
@@ -87,9 +88,9 @@
     <div class="viewer" id="viewer" hidden>
       <div class="v-backdrop" id="vBackdrop"></div>
       <div class="v-top">
-        <button class="v-btn" data-v="close" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></button>
+        <button class="v-btn" data-v="close" data-i18n-aria="aria.close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></button>
         <div class="v-title"><b id="vDate"></b><span id="vSub"></span></div>
-        <button class="v-btn" data-v="info" aria-label="정보"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg></button>
+        <button class="v-btn" data-v="info" data-i18n-aria="info.details" aria-label="Details"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg></button>
       </div>
       <div class="v-stage" id="vStage">
         <div class="v-media" id="vMedia">
@@ -98,17 +99,17 @@
           <video id="vVideo" playsinline controls preload="metadata" hidden></video>
           <div class="v-spinner" id="vSpin"></div>
         </div>
-        <button class="live-pill" id="livePill" hidden aria-label="라이브 포토 재생">
+        <button class="live-pill" id="livePill" hidden data-i18n-aria="aria.playLive" aria-label="Play Live Photo">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.2"/><circle cx="12" cy="12" r="9.4" stroke-dasharray="1.2 2.4"/></svg>LIVE
         </button>
-        <button class="v-nav prev" data-v="prev" aria-label="이전"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></button>
-        <button class="v-nav next" data-v="next" aria-label="다음"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 5 7 7-7 7"/></svg></button>
+        <button class="v-nav prev" data-v="prev" data-i18n-aria="aria.prev" aria-label="Previous"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></button>
+        <button class="v-nav next" data-v="next" data-i18n-aria="aria.next" aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 5 7 7-7 7"/></svg></button>
       </div>
       <div class="v-bottom">
         <button class="v-act" data-v="like" id="vLike"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.5 8 3.3 4.5 6.7 4.5c2.1 0 3.4 1.1 4.3 2.4.9-1.3 2.2-2.4 4.3-2.4 3.4 0 5.2 3.5 4 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg><span></span></button>
         <button class="v-act" data-v="comments" id="vCmt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg><span></span></button>
         <div class="v-tags" id="vTags"></div>
-        <button class="v-act" data-v="download" aria-label="원본 다운로드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg></button>
+        <button class="v-act" data-v="download" data-i18n-aria="info.dlOriginal" aria-label="Download original"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg></button>
       </div>
       <aside class="v-info" id="vInfo" hidden></aside>
     </div>

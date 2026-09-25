@@ -1,6 +1,7 @@
 /* ============================================================
    Moa — app UI
-   Tabs: 보관함 (date · place · map · tag views) · 앨범 · 공유·설정
+   Tabs: Library (date · place · map · tag views) · Albums · Settings
+   All UI strings go through t() (js/i18n.js); English by default.
    Every edit is an op (see core.js) applied optimistically, kept in
    a persisted pending queue, and flushed to GitHub as one commit.
    ============================================================ */
@@ -10,6 +11,7 @@ import { Repo, Account, blobToBase64, clearMediaCache } from './github.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
+import { t, setLang, lang, locale, fmtDay, fmtMonth, fmtTime } from './i18n.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -31,7 +33,8 @@ const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', a
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
-const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true }, load(LS.prefs, {}));
+const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true, lang: 'en' }, load(LS.prefs, {}));
+setLang(prefs.lang);
 
 const S = {
   spaces: load(LS.spaces, []),
@@ -130,11 +133,11 @@ function setSync(state, arg) {
   el.hidden = !state;
   el.classList.toggle('err', state === 'error');
   el.classList.toggle('info', state === 'throttle');
-  el.textContent = { pending: '저장 대기', saving: '저장 중…', error: '저장 실패', loading: '불러오는 중…', throttle: `속도 조절 ${arg}초` }[state] || '';
+  el.textContent = state ? t(`sync.${state}`, { s: arg }) : '';
 }
 
 const fmtDur = s => { const t = Math.max(0, Math.floor(s || 0)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
-const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' }); };
+const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString(locale(), { year: 'numeric', month: 'long', day: 'numeric' }); };
 const avatar = login => `https://github.com/${encodeURIComponent(login)}.png?size=96`;
 const errMsg = e => e?.message || String(e);
 
@@ -217,8 +220,9 @@ const sameRepo = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.
 const tokenFor = sp => sp.token || S.auth?.token || '';
 const loginApi = () => (S.authApi && S.authApi !== 'https://api.github.com' ? S.authApi : null);
 const account = () => new Account(S.auth.token, S.authApi);
+const albumTitle = r => r.description?.replace(/ (—|·) Moa( 공유앨범| shared album)?$/, '') || r.name;
 
-/** Is "GitHub로 로그인" available? Only when the /api functions are deployed and configured. */
+/** Is "Sign in with GitHub" available? Only when the /api functions are deployed and configured. */
 async function loadAuthConfig() {
   try {
     const r = await fetch('api/auth/config', { cache: 'no-store' });
@@ -229,7 +233,7 @@ async function loadAuthConfig() {
 }
 
 function spaceFromRepo(r) {
-  const sp = { id: r.full_name.toLowerCase(), owner: r.owner.login, repo: r.name, branch: r.default_branch || null, api: loginApi(), title: r.description?.replace(/ — Moa 공유앨범$/, '') || r.name };
+  const sp = { id: r.full_name.toLowerCase(), owner: r.owner.login, repo: r.name, branch: r.default_branch || null, api: loginApi(), title: albumTitle(r) };
   const known = S.spaces.find(x => sameRepo(x, sp) && !x.token);
   if (known) return Object.assign(known, { branch: sp.branch || known.branch, title: sp.title });
   S.spaces.push(sp);
@@ -248,7 +252,7 @@ async function boot() {
   }
   let join = h.join;
   try { join ||= JSON.parse(sessionStorage.getItem('moa.join') || 'null'); sessionStorage.removeItem('moa.join'); } catch { /* private mode */ }
-  if (h.authError) toast(h.authError === 'access_denied' ? 'GitHub 로그인을 취소했어요' : `GitHub 로그인 실패 (${h.authError})`, 4000);
+  if (h.authError) toast(h.authError === 'access_denied' ? t('auth.cancelled') : t('auth.failed', { e: h.authError }), 4000);
 
   if (S.auth) {
     try {
@@ -256,7 +260,7 @@ async function boot() {
       Object.assign(S.auth, { login: me.login, avatar: me.avatar_url, name: me.name || '' });
       save(LS.auth, S.auth);
     } catch (e) {
-      if (e.status === 401) { signedOut('로그인이 만료됐어요. 다시 로그인해 주세요'); return; }
+      if (e.status === 401) { signedOut(t('auth.expired')); return; }
     }
   }
   if (join) {
@@ -279,7 +283,7 @@ function signedOut(msg) {
 }
 
 async function logout() {
-  if (!confirm('로그아웃할까요? 이 기기에 저장된 사진 캐시도 지워요.')) return;
+  if (!confirm(t('auth.logoutConfirm'))) return;
   const token = S.auth?.token;
   fetch('api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) }).catch(() => {});
   for (const sp of S.spaces.filter(x => !x.token)) localStorage.removeItem(LS.pending(sp.id));
@@ -288,7 +292,7 @@ async function logout() {
   S.space = null; S.gh = null; S.index = null;
   await clearMediaCache().catch(() => {});
   urls.clear(); resolved.clear();
-  signedOut('로그아웃했어요');
+  signedOut(t('auth.signedOut'));
 }
 
 const MOSAIC = ['#ff9f0a', '#ff375f', '#bf5af2', '#0a84ff', '#30d158', '#ffd60a', '#64d2ff', '#ff6961', '#5e5ce6', '#ffb340', '#34c759', '#ff2d55', '#af52de', '#007aff', '#ffcc00', '#5ac8fa'];
@@ -303,28 +307,22 @@ function showWelcome({ join, adding } = {}) {
   w.innerHTML = `<div class="card">
     <div class="mosaic" aria-hidden="true">${MOSAIC.map((c, i) => `<i style="background:${c};animation-delay:${i * 35}ms"></i>`).join('')}</div>
     <h1>Moa</h1>
-    <p class="lead">친구와 함께 채우는 공유앨범.<br>사진은 내 GitHub 비공개 저장소에.</p>
-    ${join ? `<div class="invite-banner">📮 ${join.by ? `<b>@${esc(join.by)}</b>님이 ` : ''}<b>${esc(join.owner)}/${esc(join.repo)}</b> 앨범에 초대했어요. ${login ? 'GitHub로 로그인하면 바로 열 수 있어요.' : '초대를 수락한 GitHub 계정의 토큰으로 연결하세요.'}</div>` : ''}
-    ${login ? `<button class="btn btn-github btn-block" id="loginBtn">${GITHUB_MARK}GitHub로 시작하기</button>
-      <p class="note" style="margin:12px 4px 0;padding:0">GitHub 계정만 있으면 돼요 (없으면 무료 가입). 앨범마다 내 계정에 비공개 저장소가 만들어지고, 사진은 이 앱 서버를 거치지 않고 GitHub로 바로 가요. GitHub가 <b>비공개 저장소 권한</b>을 물어보는데, 앨범 저장소를 만들고 친구를 초대하는 데 필요해요. 로그아웃하면 권한도 취소돼요.</p>` : ''}
-    <details class="guide" id="tokenBox"${login ? '' : ' open'}><summary>${login ? '토큰으로 직접 연결 (고급)' : '저장소 연결'}</summary>
+    <p class="lead">${t('welcome.lead')}</p>
+    ${join ? `<div class="invite-banner">${t('welcome.invited', { by: join.by ? '@' + esc(join.by) : '', repo: `<b>${esc(join.owner)}/${esc(join.repo)}</b>` })}</div>` : ''}
+    ${login ? `<button class="btn btn-github btn-block" id="loginBtn">${GITHUB_MARK}${t('welcome.signin')}</button>` : ''}
+    <details class="guide" id="tokenBox"${login ? '' : ' open'}><summary>${t(login ? 'welcome.tokenAdvanced' : 'welcome.connect')}</summary>
     <form id="connectForm" autocomplete="off" style="padding:4px 16px 16px">
-      <label class="field"><span>GitHub 저장소</span><input name="repo" placeholder="아이디/저장소이름" value="${join ? esc(join.owner + '/' + join.repo) : ''}" required autocapitalize="off" spellcheck="false"></label>
-      <label class="field"><span>액세스 토큰</span><input name="token" type="password" placeholder="github_pat_…" required autocapitalize="off" spellcheck="false"><small>토큰은 이 기기의 브라우저에만 저장되고 GitHub 말고는 어디에도 보내지 않아요.</small></label>
-      <details class="field"><summary style="cursor:pointer;color:var(--muted);font-size:13px;margin:0 4px 8px">고급 설정</summary>
-        <label class="field"><span>브랜치 (비우면 기본 브랜치)</span><input name="branch" placeholder="main"></label>
-        <label class="field"><span>API 주소 (GitHub Enterprise)</span><input name="api" placeholder="https://api.github.com" value="${join?.api ? esc(join.api) : ''}"></label>
+      <label class="field"><span>${t('welcome.repo')}</span><input name="repo" placeholder="owner/repo" value="${join ? esc(join.owner + '/' + join.repo) : ''}" required autocapitalize="off" spellcheck="false"></label>
+      <label class="field"><span>${t('welcome.token')}</span><input name="token" type="password" placeholder="github_pat_…" required autocapitalize="off" spellcheck="false"></label>
+      <details class="field"><summary style="cursor:pointer;color:var(--muted);font-size:13px;margin:0 4px 8px">${t('welcome.advanced')}</summary>
+        <label class="field"><span>${t('welcome.branch')}</span><input name="branch" placeholder="main"></label>
+        <label class="field"><span>${t('welcome.api')}</span><input name="api" placeholder="https://api.github.com" value="${join?.api ? esc(join.api) : ''}"></label>
       </details>
-      <button class="btn ${login ? 'btn-quiet' : 'btn-primary'} btn-block" type="submit">연결하기</button>
+      <button class="btn ${login ? 'btn-quiet' : 'btn-primary'} btn-block" type="submit">${t('welcome.connectBtn')}</button>
       <p class="err" id="connectErr" hidden></p>
-      <ol class="steps" style="padding:14px 4px 0 22px">
-        <li><a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>에서 <b>Private</b> 저장소 만들기</li>
-        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained 토큰</a> → 그 저장소만 선택 → <b>Contents: Read and write</b></li>
-        <li>위에 붙여넣고 연결</li>
-      </ol>
     </form>
     </details>
-    ${adding || S.space ? '<button class="btn btn-quiet btn-block" id="welcomeCancel" style="margin-top:12px" type="button">취소</button>' : ''}
+    ${adding || S.space ? `<button class="btn btn-quiet btn-block" id="welcomeCancel" style="margin-top:12px" type="button">${t('common.cancel')}</button>` : ''}
   </div>`;
   $('#loginBtn')?.addEventListener('click', () => {
     try { if (join) sessionStorage.setItem('moa.join', JSON.stringify(join)); } catch { /* private mode */ }
@@ -338,9 +336,9 @@ function showWelcome({ join, adding } = {}) {
     const err = $('#connectErr');
     err.hidden = true;
     const r = parseRepo(form.repo.value);
-    if (!r) { err.textContent = '저장소는 "아이디/저장소이름" 형식으로 적어주세요'; err.hidden = false; return; }
+    if (!r) { err.textContent = t('welcome.repoFormat'); err.hidden = false; return; }
     const btn = form.querySelector('button[type=submit]');
-    btn.disabled = true; btn.textContent = '확인 중…';
+    btn.disabled = true; btn.textContent = t('common.checking');
     const sp = { id: `${r.owner}/${r.repo}`.toLowerCase() + (form.api.value ? '@' + form.api.value : ''), ...r, token: form.token.value.trim(), branch: form.branch.value.trim() || null, api: form.api.value.trim() || null };
     try {
       const gh = new Repo(sp);
@@ -355,7 +353,7 @@ function showWelcome({ join, adding } = {}) {
       err.textContent = errMsg(ex);
       err.hidden = false;
     } finally {
-      btn.disabled = false; btn.textContent = '연결하기';
+      btn.disabled = false; btn.textContent = t('welcome.connectBtn');
     }
   });
 }
@@ -369,14 +367,13 @@ async function showHome({ join } = {}) {
   window.scrollTo(0, 0);
   const a = S.auth;
   w.innerHTML = `<div class="card home">
-    <div class="me"><img class="avatar" alt="" src="${esc(a.avatar || avatar(a.login || 'ghost'))}"><div class="grow"><b>${esc(a.name || '@' + (a.login || ''))}</b><small>@${esc(a.login || '')} · GitHub로 로그인됨</small></div><button class="text-btn" id="logoutBtn">로그아웃</button></div>
-    <h1>앨범</h1>
+    <div class="me"><img class="avatar" alt="" src="${esc(a.avatar || avatar(a.login || 'ghost'))}"><div class="grow"><b>${esc(a.name || '@' + (a.login || ''))}</b><small>@${esc(a.login || '')}</small></div><button class="text-btn" id="logoutBtn">${t('auth.signOut')}</button></div>
+    <h1>${t('home.title')}</h1>
     <div id="homeJoin"></div>
     <div id="homeInvites"></div>
-    <div class="panel home-list" id="homeAlbums"><div class="row"><div class="grow"><small>불러오는 중…</small></div></div></div>
-    <button class="btn btn-primary btn-block" id="newRepoBtn">새 앨범 만들기</button>
-    <p class="note" style="margin:12px 4px 0;padding:0">앨범마다 내 GitHub 계정에 비공개 저장소가 하나씩 생겨요. 친구는 앨범 안의 <b>공유·설정 → 친구 초대</b>에서 GitHub 아이디로 초대해요.</p>
-    ${S.space ? '<button class="btn btn-quiet btn-block" id="homeBack" style="margin-top:12px">돌아가기</button>' : ''}
+    <div class="panel home-list" id="homeAlbums"><div class="row"><div class="grow"><small>${t('sync.loading')}</small></div></div></div>
+    <button class="btn btn-primary btn-block" id="newRepoBtn">${t('home.new')}</button>
+    ${S.space ? `<button class="btn btn-quiet btn-block" id="homeBack" style="margin-top:12px">${t('common.back')}</button>` : ''}
   </div>`;
   $('#logoutBtn').onclick = logout;
   $('#newRepoBtn').onclick = newAlbumRepo;
@@ -385,8 +382,8 @@ async function showHome({ join } = {}) {
   try {
     [albums, invites] = await Promise.all([account().albums(), account().invitations().catch(() => [])]);
   } catch (e) {
-    if (e.status === 401) return signedOut('로그인이 만료됐어요. 다시 로그인해 주세요');
-    $('#homeAlbums').innerHTML = `<div class="row"><div class="grow"><b>앨범 목록을 못 불러왔어요</b><small>${esc(errMsg(e))}</small></div></div>`;
+    if (e.status === 401) return signedOut(t('auth.expired'));
+    $('#homeAlbums').innerHTML = `<div class="row"><div class="grow"><b>${t('home.loadFailed')}</b><small>${esc(errMsg(e))}</small></div></div>`;
     return;
   }
   if ($('#welcome').hidden || !$('#homeAlbums')) return;
@@ -395,26 +392,26 @@ async function showHome({ join } = {}) {
   if (join) {
     const has = albums.find(r => sameRepo({ owner: r.owner.login, repo: r.name }, join));
     if (has) return openSpace(spaceFromRepo(has));
-    if (!inviteFor(join)) $('#homeJoin').innerHTML = `<div class="invite-banner">📮 <b>${esc(join.owner)}/${esc(join.repo)}</b> 초대가 아직 도착하지 않았어요. ${join.by ? `@${esc(join.by)}` : '앨범 주인'}님께 내 GitHub 아이디 <b>@${esc(a.login)}</b>를 알려주면 바로 초대받을 수 있어요.</div>`;
+    if (!inviteFor(join)) $('#homeJoin').innerHTML = `<div class="invite-banner">${t('home.noInviteYet', { repo: `<b>${esc(join.owner)}/${esc(join.repo)}</b>`, me: `<b>@${esc(a.login)}</b>` })}</div>`;
   }
-  $('#homeInvites').innerHTML = invites.length ? `<h2 class="section-title" style="margin:0 0 10px">받은 초대</h2><div class="panel">${invites.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.inviter?.avatar_url || avatar(i.inviter?.login || 'ghost'))}"><div class="grow"><b>${esc(i.repository.description?.replace(/ — Moa 공유앨범$/, '') || i.repository.name)}</b><small>@${esc(i.inviter?.login || '')}님이 초대 · ${esc(i.repository.full_name)}</small></div><button class="btn btn-primary btn-sm" data-accept="${i.id}">수락</button></div>`).join('')}</div>` : '';
+  $('#homeInvites').innerHTML = invites.length ? `<h2 class="section-title" style="margin:0 0 10px">${t('home.invites')}</h2><div class="panel">${invites.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.inviter?.avatar_url || avatar(i.inviter?.login || 'ghost'))}"><div class="grow"><b>${esc(albumTitle(i.repository))}</b><small>@${esc(i.inviter?.login || '')} · ${esc(i.repository.full_name)}</small></div><button class="btn btn-primary btn-sm" data-accept="${i.id}">${t('home.accept')}</button></div>`).join('')}</div>` : '';
   const rows = [
-    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}"></span><span class="grow"><b>${esc(r.description?.replace(/ — Moa 공유앨범$/, '') || r.name)}</b><small>${esc(r.full_name)}${r.owner.login !== a.login ? ` · @${esc(r.owner.login)}님의 앨범` : ''}${r.private ? '' : ' · ⚠️ 공개'}</small></span><span class="val">›</span></button>`),
-    ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>토큰으로 연결</small></span><span class="val">›</span></button>`),
+    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}"></span><span class="grow"><b>${esc(albumTitle(r))}</b><small>${esc(r.full_name)}${r.private ? '' : ` · ⚠️ ${t('home.public')}`}</small></span><span class="val">›</span></button>`),
+    ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>${t('home.viaToken')}</small></span><span class="val">›</span></button>`),
   ];
-  $('#homeAlbums').innerHTML = rows.join('') || '<div class="row"><div class="grow"><b>아직 앨범이 없어요</b><small>새 앨범을 만들거나 친구의 초대를 기다려 보세요</small></div></div>';
+  $('#homeAlbums').innerHTML = rows.join('') || `<div class="row"><div class="grow"><b>${t('home.empty')}</b></div></div>`;
   w.onclick = async e => {
     const acc = e.target.closest('[data-accept]');
     const repo = e.target.closest('[data-repo]');
     const tsp = e.target.closest('[data-space]');
     if (acc) {
-      acc.disabled = true; acc.textContent = '수락 중…';
+      acc.disabled = true; acc.textContent = t('home.accepting');
       const inv = invites.find(i => String(i.id) === acc.dataset.accept);
       try {
         await account().accept(inv.id);
-        toast(`'${inv.repository.name}' 앨범에 참여했어요`);
+        toast(t('home.joined', { name: albumTitle(inv.repository) }));
         openSpace(spaceFromRepo(inv.repository));
-      } catch (ex) { acc.disabled = false; acc.textContent = '수락'; toast(errMsg(ex), 4000); }
+      } catch (ex) { acc.disabled = false; acc.textContent = t('home.accept'); toast(errMsg(ex), 4000); }
     } else if (repo) {
       openSpace(spaceFromRepo(albums.find(r => r.full_name === repo.dataset.repo)));
     } else if (tsp) {
@@ -430,32 +427,32 @@ function repoSlug(title) {
 }
 
 function newAlbumRepo() {
-  const sh = openSheet(`<h2>새 앨범</h2>
-    <label class="field"><span>앨범 이름</span><input id="nrTitle" placeholder="예: 2026 제주 여행" maxlength="60"></label>
-    <label class="field"><span>GitHub 저장소 이름</span><input id="nrName" autocapitalize="off" spellcheck="false" maxlength="100"><small>내 계정(@${esc(S.auth.login || '')})에 <b>비공개</b>로 만들어져요. 영문·숫자·-만 쓸 수 있어요.</small></label>
+  const sh = openSheet(`<h2>${t('newAlbum.title')}</h2>
+    <label class="field"><span>${t('newAlbum.name')}</span><input id="nrTitle" placeholder="${t('newAlbum.namePh')}" maxlength="60"></label>
+    <label class="field"><span>${t('newAlbum.repo')}</span><input id="nrName" autocapitalize="off" spellcheck="false" maxlength="100"></label>
     <p class="err" id="nrErr" hidden></p>
-    <div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="nrOk">만들기</button></div>`);
-  const t = $('#nrTitle', sh), n = $('#nrName', sh);
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="nrOk">${t('common.create')}</button></div>`);
+  const titleIn = $('#nrTitle', sh), n = $('#nrName', sh);
   let touched = false;
   n.value = repoSlug('');
-  t.oninput = () => { if (!touched) n.value = repoSlug(t.value); };
+  titleIn.oninput = () => { if (!touched) n.value = repoSlug(titleIn.value); };
   n.oninput = () => { touched = true; };
-  setTimeout(() => t.focus(), 50);
+  setTimeout(() => titleIn.focus(), 50);
   $('#nrOk', sh).onclick = async () => {
-    const title = t.value.trim() || '우리 앨범';
+    const title = titleIn.value.trim() || t('newAlbum.default');
     const name = n.value.trim();
     const err = $('#nrErr', sh);
-    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) { err.textContent = '저장소 이름은 영문, 숫자, -, _, . 만 쓸 수 있어요'; err.hidden = false; return; }
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) { err.textContent = t('newAlbum.badName'); err.hidden = false; return; }
     const btn = $('#nrOk', sh);
-    btn.disabled = true; btn.textContent = '만드는 중…';
+    btn.disabled = true; btn.textContent = t('common.creating');
     try {
       const r = await account().createAlbumRepo(name, title);
       closeSheet();
       openSpace(spaceFromRepo(r), { initTitle: title });
     } catch (e) {
-      err.textContent = e.status === 422 ? '이미 같은 이름의 저장소가 있어요. 다른 이름을 써주세요' : errMsg(e);
+      err.textContent = e.status === 422 ? t('newAlbum.taken') : errMsg(e);
       err.hidden = false;
-      btn.disabled = false; btn.textContent = '만들기';
+      btn.disabled = false; btn.textContent = t('common.create');
     }
   };
 }
@@ -466,9 +463,9 @@ async function openSpace(sp, { initTitle } = {}) {
   save(LS.current, sp.id);
   S.gh = new Repo({ ...sp, token: tokenFor(sp) });
   S.initTitle = initTitle || null;
-  S.gh.onWait = s => toast(`GitHub 요청 한도에 걸려 ${s}초 기다리는 중…`, 5000);
+  S.gh.onWait = s => toast(t('rate.wait', { s }), 5000);
   // GitHub recommends ≤ 6 pushes/minute per repository; the client paces itself
-  S.gh.onThrottle = s => { setSync('throttle', s); if (!S.throttleToast) { S.throttleToast = true; toast('GitHub 권장 저장 속도(분당 6회)에 맞춰 잠시 쉬었다 저장해요', 3500); } };
+  S.gh.onThrottle = s => setSync('throttle', s);
   S.pending = load(LS.pending(sp.id), []);
   Object.assign(S, { index: null, head: null, base: null, album: null, me: null, tab: 'photos' });
   S.filter = { kind: '', tag: '', q: '' };
@@ -477,7 +474,7 @@ async function openSpace(sp, { initTitle } = {}) {
   $('#welcome').hidden = true;
   $('#shell').hidden = false;
   $('#spaceName').textContent = sp.title || sp.repo;
-  $('#content').innerHTML = '<div class="empty"><p>앨범을 불러오는 중…</p></div>';
+  $('#content').innerHTML = `<div class="empty"><p>${t('sync.loading')}</p></div>`;
   $('#hero').innerHTML = '';
   showTab('photos', false);
   setSync('loading');
@@ -494,9 +491,9 @@ async function openSpace(sp, { initTitle } = {}) {
   } catch (e) {
     if (S.space !== sp) return;
     setSync('error');
-    if (e.status === 401 && !sp.token) return signedOut('로그인이 만료됐어요. 다시 로그인해 주세요');
-    if (e.status === 0 && await loadOfflineIndex()) { toast('오프라인 — 마지막으로 불러온 앨범을 보여줘요'); return; }
-    $('#content').innerHTML = `<div class="empty"><h2>열 수 없어요</h2><p>${esc(errMsg(e))}</p><button class="btn btn-primary" id="retryBtn">다시 시도</button> <button class="btn btn-quiet" id="reconnectBtn">${sp.token ? '토큰 다시 입력' : '앨범 목록'}</button></div>`;
+    if (e.status === 401 && !sp.token) return signedOut(t('auth.expired'));
+    if (e.status === 0 && await loadOfflineIndex()) { toast(t('offline')); return; }
+    $('#content').innerHTML = `<div class="empty"><h2>${t('open.failed')}</h2><p>${esc(errMsg(e))}</p><button class="btn btn-primary" id="retryBtn">${t('common.retry')}</button> <button class="btn btn-quiet" id="reconnectBtn">${t(sp.token ? 'open.reenterToken' : 'home.title')}</button></div>`;
     $('#retryBtn').onclick = () => openSpace(sp);
     $('#reconnectBtn').onclick = () => (sp.token ? showWelcome({ join: { owner: sp.owner, repo: sp.repo, api: sp.api }, adding: true }) : showHome());
   }
@@ -527,7 +524,7 @@ async function refresh(first = false) {
   const before = S.index ? Object.keys(S.index.photos).length : null;
   adopt(st);
   const after = Object.keys(S.index.photos).length;
-  if (!first && before != null && after > before) toast(`새 사진 ${after - before}장이 올라왔어요`);
+  if (!first && before != null && after > before) toast(t('refresh.new', { n: after - before }));
   S.gh.primeCache('.moa/index-cache.json', new Blob([JSON.stringify({ head, index: ix })], { type: 'application/json' }));
   if (first && S.canWrite && S.me?.login && !S.index.members[S.me.login]) edit({ op: 'join', user: S.me.login, at: new Date().toISOString() });
   runGeocodeJob();
@@ -552,7 +549,7 @@ function serial(fn) { const p = chain.then(fn, fn); chain = p.catch(() => {}); r
 let flushTimer = null, firstPendingAt = 0;
 function edit(op) {
   if (!S.index) return;
-  if (!S.canWrite) { toast('이 저장소는 읽기 전용이에요'); return; }
+  if (!S.canWrite) { toast(t('readonly')); return; }
   C.applyOp(S.index, op);
   if (!S.pending.length) firstPendingAt = Date.now();
   S.pending.push(op);
@@ -571,7 +568,7 @@ function scheduleFlush(ms = 2500) {
 function describe(ops) {
   const n = ops.length;
   const kinds = [...new Set(ops.map(o => o.op))];
-  const names = { tag: '태그', like: '좋아요', comment: '댓글', uncomment: '댓글 삭제', updatePhoto: '사진 정보', deletePhotos: '사진 삭제', createAlbum: '앨범 만들기', renameAlbum: '앨범 이름', deleteAlbum: '앨범 삭제', albumMembership: '앨범 정리', setCover: '앨범 커버', join: '참여', setTitle: '제목' };
+  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title' };
   return `Moa: ${kinds.map(k => names[k] || k).join(', ')}${n > 1 ? ` (${n})` : ''}${S.me?.login ? ` — @${S.me.login}` : ''}`;
 }
 
@@ -595,7 +592,7 @@ function flush() {
       if (S.space !== sp) return;
       console.error(e);
       setSync('error');
-      toast('저장하지 못했어요: ' + errMsg(e) + ' — 잠시 후 다시 시도할게요', 4000);
+      toast(t('save.failed', { e: errMsg(e) }), 4000);
       flushTimer = setTimeout(flush, 20000);
     }
   });
@@ -652,27 +649,27 @@ function renderInit(empty) {
   setSync(null);
   const c = $('#content');
   if (!S.canWrite) {
-    c.innerHTML = `<div class="empty"><h2>아직 앨범이 아니에요</h2><p>이 저장소에는 Moa 앨범이 없고, 이 토큰으로는 만들 수 없어요 (읽기 전용).</p></div>`;
+    c.innerHTML = `<div class="empty"><h2>${t('init.notAlbum')}</h2></div>`;
     return;
   }
   c.innerHTML = `<div class="empty">
-    <h2>${empty ? '비어 있는 저장소예요' : '이 저장소에 앨범을 만들까요?'}</h2>
-    <p><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b>에 Moa 앨범을 시작합니다. 사진은 이 저장소에 파일로 저장되고, 앨범 정보는 <code>album.json</code>과 월별 <code>index/</code> 파일에 담겨요.</p>
-    <div style="max-width:340px;margin:0 auto"><label class="field"><span>앨범 이름</span><input id="initTitle" value="${esc(S.initTitle || S.repoInfo?.description?.replace(/ — Moa 공유앨범$/, '') || '우리 앨범')}"></label>
-    <button class="btn btn-primary btn-block" id="initBtn">앨범 만들기</button></div></div>`;
+    <h2>${t('init.title')}</h2>
+    <p><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b></p>
+    <div style="max-width:340px;margin:0 auto"><label class="field"><span>${t('newAlbum.name')}</span><input id="initTitle" value="${esc(S.initTitle || (S.repoInfo?.description ? albumTitle(S.repoInfo) : '') || t('newAlbum.default'))}"></label>
+    <button class="btn btn-primary btn-block" id="initBtn">${t('init.create')}</button></div></div>`;
   $('#initBtn').onclick = () => serial(async () => {
     const btn = $('#initBtn');
-    btn.disabled = true; btn.textContent = '만드는 중…';
-    const title = $('#initTitle').value.trim() || '우리 앨범';
+    btn.disabled = true; btn.textContent = t('common.creating');
+    const title = $('#initTitle').value.trim() || t('newAlbum.default');
     S.initTitle = null;
     try {
-      if (empty) await S.gh.seed('README.md', repoReadme(title), 'Moa 앨범 시작');
-      const r = await S.gh.commit({ ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: 앨범 만들기 — @${S.me.login}`, title });
+      if (empty) await S.gh.seed('README.md', repoReadme(title), 'Moa: start album');
+      const r = await S.gh.commit({ ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: create album — @${S.me.login}`, title });
       $('#toolbar').hidden = false;
       adopt(r);
-      toast('앨범을 만들었어요. 사진을 올려보세요!');
+      toast(t('init.done'));
     } catch (e) {
-      btn.disabled = false; btn.textContent = '앨범 만들기';
+      btn.disabled = false; btn.textContent = t('init.create');
       toast(errMsg(e), 4000);
     }
   });
@@ -681,7 +678,7 @@ function renderInit(empty) {
 }
 
 function repoReadme(title) {
-  return `# ${title}\n\n[Moa](https://github.com/erie-pixel/awesome-design-md/tree/main/moa) 공유앨범 저장소예요.\n\n- \`album.json\` — 앨범 이름, 멤버, 앨범 목록\n- \`index/YYYY-MM.json\` — 촬영 월별 사진 정보, 태그, 댓글\n- \`media/YYYY/MM/DD/\` — 원본 사진·동영상 (\`*.live.mov\` 는 라이브 포토 영상)\n- \`preview/\`, \`thumb/\` — 앱에서 보여주는 JPEG\n\n파일을 직접 옮기거나 지우면 앨범이 깨질 수 있으니 Moa 앱에서 관리하세요.\n`;
+  return `# ${title}\n\nA Moa shared album.\n\n- \`album.json\` — title, members, albums\n- \`index/YYYY-MM.json\` — photo metadata by capture month\n- \`media/YYYY/MM/DD/\` — originals (\`*.live.mov\` = Live Photo motion)\n- \`preview/\`, \`thumb/\` — JPEG renditions\n\nManage files from the app; moving them by hand can break the album.\n`;
 }
 
 // ---------------- capacity (GitHub repository limits) ----------------
@@ -692,8 +689,8 @@ const pctText = r => `${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%`;
 function capBanner() {
   const u = storageUsage();
   if (u.level === 'ok') return '';
-  const head = u.level === 'over' ? '권장 용량 초과' : `용량 ${pctText(u.ratio)} 사용`;
-  return `<div class="cap-banner ${u.level}"><span><b>${head}</b> · 남은 ${C.fmtBytes(u.remaining)} / 10GB</span><button class="text-btn" data-act="storage">자세히</button></div>`;
+  const head = u.level === 'over' ? t('cap.over') : t('cap.used', { p: pctText(u.ratio) });
+  return `<div class="cap-banner ${u.level}"><span><b>${head}</b> · ${t('cap.left', { b: C.fmtBytes(u.remaining) })}</span><button class="text-btn" data-act="storage">${t('cap.details')}</button></div>`;
 }
 
 function ring(ratio, level) {
@@ -712,14 +709,14 @@ function limitRows() {
   let shard = { path: '', size: 0 };
   for (const [path, f] of S.base?.files || []) if ((f.size || 0) > shard.size) shard = { path, size: f.size };
   const pushes = S.gh.recentPushes();
-  const row = (level, title, sub, val) => `<div class="row"><span class="dot ${level}"></span><div class="grow"><b>${title}</b><small>${sub}</small></div><span class="val">${val}</span></div>`;
+  const row = (level, title, sub, val) => `<div class="row"><span class="dot ${level}"></span><div class="grow"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</div><span class="val">${val}</span></div>`;
   return [
-    row(u.level, '저장소 크기 · 권장 최대 10GB', 'GitHub 권장치를 넘으면 느려질 수 있어요', `${C.fmtBytes(u.used)}`),
-    row(LIM.levelOf(big.size / LIM.LIMITS.objectHard), '파일 1개 · 최대 100MB', big.size ? `가장 큰 파일 ${esc(big.name || '')}` : '아직 파일이 없어요', C.fmtBytes(big.size)),
-    row('info', '권장 파일 크기 1MB', over1 ? `1MB 넘는 사진 ${over1}장 — 원본은 대부분 커요. 옵션에서 원본 저장을 끄면 줄어요` : '모두 권장 크기 이하', `${over1}장`),
-    row(busy.level, '폴더당 파일 · 권장 최대 3,000개', busy.dir ? `가장 붐비는 폴더 ${esc(busy.dir)}` : '날짜별 폴더로 나눠 저장해요', `${busy.count.toLocaleString()}개`),
-    shard.path ? row(LIM.levelOf(shard.size / LIM.LIMITS.objectRecommended), '앨범 정보 파일 · 권장 1MB', `가장 큰 조각 ${esc(shard.path)} (월별로 나눠 저장)`, C.fmtBytes(shard.size)) : '',
-    row(pushes >= LIM.LIMITS.pushesPerMinute ? 'warn' : 'ok', '저장 속도 · 권장 분당 6회', pushes >= LIM.LIMITS.pushesPerMinute ? '한도에 닿아서 다음 저장은 잠시 기다렸다 해요' : '넘을 것 같으면 앱이 알아서 기다렸다 저장해요', `${pushes}회/분`),
+    row(u.level, t('lim.repo'), '', C.fmtBytes(u.used)),
+    row(LIM.levelOf(big.size / LIM.LIMITS.objectHard), t('lim.file'), big.size ? esc(big.name || '') : '', C.fmtBytes(big.size)),
+    row('info', t('lim.fileRec'), '', t('lim.nPhotos', { n: over1 })),
+    row(busy.level, t('lim.dir'), busy.dir ? esc(busy.dir) : '', busy.count.toLocaleString(locale())),
+    shard.path ? row(LIM.levelOf(shard.size / LIM.LIMITS.objectRecommended), t('lim.index'), esc(shard.path), C.fmtBytes(shard.size)) : '',
+    row(pushes >= LIM.LIMITS.pushesPerMinute ? 'warn' : 'ok', t('lim.push'), '', t('lim.perMin', { n: pushes })),
   ].join('');
 }
 
@@ -732,16 +729,16 @@ function uploadPlanHTML(E, keepOriginal) {
   const n = E.filter(e => !e.skip).length;
   const li = (level, text) => `<li><span class="dot ${level}"></span><span>${text}</span></li>`;
   const items = [
-    tooBig ? li('danger', `100MB 넘는 파일 ${tooBig}개는 GitHub가 받지 않아 빼고 올려요`) : '',
-    plan.heavy.length ? li('warn', `50MB 넘는 파일 ${plan.heavy.length}개 — 브라우저 업로드가 느리거나 실패할 수 있어요`) : '',
-    plan.overRecommended.length && keepOriginal ? li('info', `GitHub 권장 파일 크기(1MB)를 넘는 원본 ${plan.overRecommended.length}개 — 원본 저장을 끄면 약 ${C.fmtBytes(withOrig.bytes - noOrig.bytes)} 줄어요`) : '',
-    plan.level !== 'ok' ? li(plan.level, plan.level === 'over' ? `업로드하면 권장 용량 10GB를 넘어요 (${pctText(plan.ratioAfter)})` : `업로드 후 권장 용량의 ${pctText(plan.ratioAfter)}를 쓰게 돼요`) : '',
-    n > 10 ? li('info', `${Math.ceil(n / 10)}번에 나눠 저장해요 (GitHub 권장 분당 6회 이하로 속도 조절)`) : '',
+    tooBig ? li('danger', t('plan.tooBig', { n: tooBig })) : '',
+    plan.heavy.length ? li('warn', t('plan.heavy', { n: plan.heavy.length })) : '',
+    plan.overRecommended.length && keepOriginal ? li('info', t('plan.saveOrig', { b: C.fmtBytes(withOrig.bytes - noOrig.bytes) })) : '',
+    plan.level !== 'ok' ? li(plan.level, t(plan.level === 'over' ? 'plan.over' : 'plan.after', { p: pctText(plan.ratioAfter) })) : '',
+    n > 10 ? li('info', t('plan.batches', { n: Math.ceil(n / 10) })) : '',
   ].join('');
   return { plan, html: `<div class="cap ${plan.level}"><div class="cap-track"><i class="add" style="transform:scaleX(${Math.min(1, plan.ratioAfter).toFixed(4)})"></i><i class="used" style="transform:scaleX(${Math.min(1, plan.ratioBefore).toFixed(4)})"></i></div>
-    <div class="cap-labels"><span>이번 업로드 약 <b>${C.fmtBytes(plan.bytes)}</b></span><span>남은 용량 <b>${C.fmtBytes(plan.remainingAfter)}</b> / 10GB</span></div></div>
+    <div class="cap-labels"><span>${t('plan.this', { b: `<b>${C.fmtBytes(plan.bytes)}</b>` })}</span><span>${t('plan.left', { b: `<b>${C.fmtBytes(plan.remainingAfter)}</b>` })}</span></div></div>
     ${items ? `<ul class="limit-list">${items}</ul>` : ''}
-    ${plan.level === 'over' ? '<label class="ack"><input type="checkbox" id="upAck">GitHub 권장 용량을 넘는 걸 알고 올릴게요 (저장소가 느려질 수 있어요)</label>' : ''}` };
+    ${plan.level === 'over' ? `<label class="ack"><input type="checkbox" id="upAck">${t('plan.ack')}</label>` : ''}` };
 }
 
 // ---------------- photos tab ----------------
@@ -760,14 +757,13 @@ function renderPhotos() {
   if (S.view !== 'map' && S.map) { S.map.remove(); S.map = null; }
 
   if (!all.length) {
-    c.innerHTML = `<div class="empty"><h2>${S.album ? '앨범이 비어 있어요' : '첫 사진을 올려보세요'}</h2>
-      <p>${S.album ? '보관함에서 사진을 선택해 이 앨범에 추가하거나, 여기서 바로 업로드하세요.' : '아이폰 사진의 촬영 날짜·장소·라이브 포토가 그대로 담겨요. 친구도 같은 저장소에 올리면 모두 함께 보여요.'}</p>
-      ${S.canWrite ? '<button class="btn btn-primary" data-act="upload">사진 올리기</button>' : ''}</div>`;
+    c.innerHTML = `<div class="empty"><h2>${t(S.album ? 'empty.album' : 'empty.library')}</h2>
+      ${S.canWrite ? `<button class="btn btn-primary" data-act="upload">${t('empty.upload')}</button>` : ''}</div>`;
     S.list = [];
     return;
   }
   if (!list.length) {
-    c.innerHTML = '<div class="empty"><h2>조건에 맞는 사진이 없어요</h2><p>필터나 검색어를 바꿔보세요.</p><button class="btn btn-quiet" data-act="clearFilter">필터 지우기</button></div>';
+    c.innerHTML = `<div class="empty"><h2>${t('empty.noMatch')}</h2><button class="btn btn-quiet" data-act="clearFilter">${t('empty.clear')}</button></div>`;
     S.list = [];
     return;
   }
@@ -778,19 +774,19 @@ function renderPhotos() {
     const groups = C.groupByDate(list, S.order);
     let month = '';
     for (const g of groups) {
-      if (g.month !== month) { month = g.month; html += `<h2 class="month">${/^\d{4}-\d{2}$/.test(month) ? C.fmtMonth(month) : esc(month)}</h2>`; }
+      if (g.month !== month) { month = g.month; html += `<h2 class="month">${/^\d{4}-\d{2}$/.test(month) ? fmtMonth(month) : '—'}</h2>`; }
       const labels = [...new Set(g.photos.map(p => p.place?.name || p.place?.label).filter(Boolean))];
-      const sub = labels.length ? esc(labels[0]) + (labels.length > 1 ? ` 외 ${labels.length - 1}곳` : '') : '';
-      html += `<div class="group-h"><h3>${esc(g.title)}</h3><span class="sub">${sub}</span></div><div class="grid">${g.photos.map(tileHTML).join('')}</div>`;
+      const sub = labels.length ? esc(labels[0]) + (labels.length > 1 ? t('date.more', { n: labels.length - 1 }) : '') : '';
+      html += `<div class="group-h"><h3>${/^\d{4}-\d{2}-\d{2}$/.test(g.key) ? fmtDay(g.key) : '—'}</h3><span class="sub">${sub}</span></div><div class="grid">${g.photos.map(tileHTML).join('')}</div>`;
     }
     S.list = groups.flatMap(g => g.photos);
   } else if (S.view === 'place') {
     const groups = C.groupByPlace(list, { level: S.placeLevel, order: S.placeOrder });
-    html = groups.map(g => groupCard(g, g.none ? '위치 정보가 없는 사진' : [g.subtitle, periodText(g.range)].filter(Boolean).join(' · '), !g.none && g.center)).join('');
+    html = groups.map(g => groupCard(g, g.none ? '' : [g.subtitle, periodText(g.range)].filter(Boolean).join(' · '), !g.none && g.center)).join('');
     S.list = groups.flatMap(g => g.photos);
   } else {
     const groups = C.groupByTag(list);
-    html = groups.map(g => groupCard(g, g.none ? '태그를 달면 여기서 모아볼 수 있어요' : '')).join('');
+    html = groups.map(g => groupCard(g, '')).join('');
     const seen = new Set();
     S.list = groups.flatMap(g => g.photos).filter(p => !seen.has(p.id) && seen.add(p.id));
   }
@@ -810,32 +806,32 @@ function groupCard(g, sub, center) {
   const LIMIT = 12;
   const shown = open ? g.photos : g.photos.slice(0, LIMIT);
   return `<section class="place-card">
-    <div class="group-h"><div style="min-width:0"><h3>${esc(g.title)}</h3><div class="sub">${esc(sub)}</div></div>
-      ${center ? `<button class="text-btn" data-act="mapAt" data-lat="${center.lat}" data-lng="${center.lng}">지도</button>` : ''}</div>
+    <div class="group-h"><div style="min-width:0"><h3>${esc(g.none ? t(g.key === '' && S.view === 'tag' ? 'group.noTag' : 'group.noPlace') : g.title)}</h3>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>
+      ${center ? `<button class="text-btn" data-act="mapAt" data-lat="${center.lat}" data-lng="${center.lng}">${t('view.map')}</button>` : ''}</div>
     <div class="grid">${shown.map(tileHTML).join('')}</div>
-    <div class="foot"><span>${g.photos.length}장</span>${g.photos.length > LIMIT ? `<button class="text-btn" data-act="expand" data-key="${esc(key)}">${open ? '접기' : `모두 보기`}</button>` : ''}</div>
+    <div class="foot"><span>${t('n.photos', { n: g.photos.length })}</span>${g.photos.length > LIMIT ? `<button class="text-btn" data-act="expand" data-key="${esc(key)}">${t(open ? 'group.less' : 'group.all')}</button>` : ''}</div>
   </section>`;
 }
 
 function tileHTML(p) {
-  return `<button class="tile${S.selected.has(p.id) ? ' sel' : ''}" data-id="${esc(p.id)}" aria-label="${esc(p.name || '사진')}">${thumbImg(p.files?.thumb)}${p.files?.live ? `<span class="badge">${ICON.live}</span>` : ''}${p.kind === 'video' ? `<span class="dur">${fmtDur(p.duration)}</span>` : ''}${p.likes?.length ? ICON.heart : ''}<span class="check"></span></button>`;
+  return `<button class="tile${S.selected.has(p.id) ? ' sel' : ''}" data-id="${esc(p.id)}" aria-label="${esc(p.name || t('photo'))}">${thumbImg(p.files?.thumb)}${p.files?.live ? `<span class="badge">${ICON.live}</span>` : ''}${p.kind === 'video' ? `<span class="dur">${fmtDur(p.duration)}</span>` : ''}${p.likes?.length ? ICON.heart : ''}<span class="check"></span></button>`;
 }
 
 function renderHero(all) {
   const h = $('#hero');
   const lives = all.filter(p => p.files?.live).length;
   const videos = all.filter(p => p.kind === 'video').length;
-  const bits = [`사진 ${(all.length - videos).toLocaleString()}장`];
-  if (videos) bits.push(`동영상 ${videos}개`);
-  if (lives) bits.push(`라이브 ${lives}`);
+  const bits = [t('hero.photos', { n: all.length - videos })];
+  if (videos) bits.push(t('hero.videos', { n: videos }));
+  if (lives) bits.push(t('hero.live', { n: lives }));
   if (S.album) {
     const a = S.index.albums[S.album];
-    h.innerHTML = `<div style="min-width:0"><button class="back" data-act="backAlbums">${ICON.back}앨범</button><h1>${esc(a.name)}</h1><p>${bits.join(' · ')}${a.by ? ` · @${esc(a.by)}` : ''}</p></div>
-      <div class="hero-actions">${S.canWrite ? '<button class="btn btn-quiet btn-sm" data-act="albumMenu">편집</button>' : ''}</div>`;
+    h.innerHTML = `<div style="min-width:0"><button class="back" data-act="backAlbums">${ICON.back}${t('tab.albums')}</button><h1>${esc(a.name)}</h1><p>${bits.join(' · ')}${a.by ? ` · @${esc(a.by)}` : ''}</p></div>
+      <div class="hero-actions">${S.canWrite ? `<button class="btn btn-quiet btn-sm" data-act="albumMenu">${t('common.edit')}</button>` : ''}</div>`;
   } else {
     const members = Object.keys(S.index.members || {}).length;
-    if (members > 1) bits.push(`멤버 ${members}명`);
-    h.innerHTML = `<div><h1>보관함</h1><p>${bits.join(' · ')}</p></div>`;
+    if (members > 1) bits.push(t('hero.members', { n: members }));
+    h.innerHTML = `<div><h1>${t('tab.library')}</h1><p>${bits.join(' · ')}</p></div>`;
   }
 }
 
@@ -845,11 +841,11 @@ function renderToolbar(all) {
   $('#segThumb').style.transform = `translateX(${views.indexOf(S.view) * 100}%)`;
   const ctl = $('#controls');
   if (S.view === 'date') {
-    ctl.innerHTML = `<select data-ctl="order" aria-label="정렬"><option value="desc">최신순</option><option value="asc">오래된순</option></select>`;
+    ctl.innerHTML = `<select data-ctl="order" aria-label="${t('sort')}"><option value="desc">${t('sort.newest')}</option><option value="asc">${t('sort.oldest')}</option></select>`;
     ctl.querySelector('select').value = S.order;
   } else if (S.view === 'place') {
-    ctl.innerHTML = `<select data-ctl="placeLevel" aria-label="장소 단위"><option value="country">나라</option><option value="city">도시</option><option value="district">동네</option></select>
-      <select data-ctl="placeOrder" aria-label="정렬"><option value="recent">최근 방문순</option><option value="count">사진 많은순</option><option value="name">이름순</option></select>`;
+    ctl.innerHTML = `<select data-ctl="placeLevel" aria-label="${t('place.level')}"><option value="country">${t('place.country')}</option><option value="city">${t('place.city')}</option><option value="district">${t('place.district')}</option></select>
+      <select data-ctl="placeOrder" aria-label="${t('sort')}"><option value="recent">${t('place.recent')}</option><option value="count">${t('place.count')}</option><option value="name">${t('place.name')}</option></select>`;
     ctl.querySelector('[data-ctl=placeLevel]').value = S.placeLevel;
     ctl.querySelector('[data-ctl=placeOrder]').value = S.placeOrder;
   } else ctl.innerHTML = '';
@@ -860,11 +856,11 @@ function renderToolbar(all) {
   const favs = all.filter(p => p.likes?.length).length;
   const tags = C.tagCounts(all).slice(0, 40);
   $('#chips').innerHTML = [
-    `<button class="chip${!f.kind && !f.tag ? ' on' : ''}" data-chip="all">전체</button>`,
+    `<button class="chip${!f.kind && !f.tag ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
     lives ? `<button class="chip${f.kind === 'live' ? ' on' : ''}" data-chip="kind" data-v="live">${ICON.live}LIVE <span class="n">${lives}</span></button>` : '',
-    videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">동영상 <span class="n">${videos}</span></button>` : '',
-    favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ 좋아요 <span class="n">${favs}</span></button>` : '',
-    ...tags.map(([t, n]) => `<button class="chip${f.tag === t ? ' on' : ''}" data-chip="tag" data-v="${esc(t)}">#${esc(t)} <span class="n">${n}</span></button>`),
+    videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">${t('chip.videos')} <span class="n">${videos}</span></button>` : '',
+    favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ ${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
+    ...tags.map(([tg, n]) => `<button class="chip${f.tag === tg ? ' on' : ''}" data-chip="tag" data-v="${esc(tg)}">#${esc(tg)} <span class="n">${n}</span></button>`),
   ].join('');
 }
 
@@ -873,9 +869,9 @@ function renderToolbar(all) {
 function renderMap(list, c) {
   const pts = list.filter(p => p.gps).sort((a, b) => C.sortTs(b) - C.sortTs(a));
   S.list = pts;
-  if (!window.L) { c.innerHTML = '<div class="empty"><p>지도를 불러오지 못했어요.</p></div>'; return; }
+  if (!window.L) { c.innerHTML = `<div class="empty"><p>${t('map.failed')}</p></div>`; return; }
   S.map?.remove();
-  c.innerHTML = `<div class="map-wrap"><div id="map" style="width:100%;height:100%"></div><div class="map-note">${pts.length ? `${pts.length}장` : '위치가 있는 사진이 없어요'}${list.length > pts.length ? ` · 위치 없는 ${list.length - pts.length}장 제외` : ''}</div></div>`;
+  c.innerHTML = `<div class="map-wrap"><div id="map" style="width:100%;height:100%"></div><div class="map-note">${pts.length ? t('n.photos', { n: pts.length }) : t('map.none')}</div></div>`;
   const map = S.map = L.map('map', { worldCopyJump: true, zoomControl: !matchMedia('(pointer: coarse)').matches });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
   const layer = L.layerGroup().addTo(map);
@@ -904,9 +900,9 @@ function renderMap(list, c) {
 }
 
 function openClusterSheet(list) {
-  const sh = openSheet(`<h2>이 근처 사진 ${list.length}장</h2><div class="grid" style="margin:0 -20px">${list.map(tileHTML).join('')}</div>`, { kind: 'cluster' });
+  const sh = openSheet(`<h2>${t('n.photos', { n: list.length })}</h2><div class="grid" style="margin:0 -20px">${list.map(tileHTML).join('')}</div>`, { kind: 'cluster' });
   observeThumbs(sh);
-  sh.onclick = e => { const t = e.target.closest('.tile'); if (t) { closeSheet(); openViewer(t.dataset.id, list); } };
+  sh.onclick = e => { const tile = e.target.closest('.tile'); if (tile) { closeSheet(); openViewer(tile.dataset.id, list); } };
 }
 
 // ---------------- albums tab ----------------
@@ -918,32 +914,35 @@ function albumCover(a, id) {
 }
 
 function renderAlbums() {
-  const t = $('#tab-albums');
+  const el = $('#tab-albums');
   const albums = Object.entries(S.index.albums).sort((a, b) => (b[1].createdAt || '').localeCompare(a[1].createdAt || ''));
   const all = photos();
   const smart = [
-    ['live', '라이브 포토', all.filter(p => p.files?.live)],
-    ['video', '동영상', all.filter(p => p.kind === 'video')],
-    ['fav', '좋아요', all.filter(p => p.likes?.length)],
-  ].filter(s => s[2].length);
+    ['live', t('smart.live'), all.filter(p => p.files?.live)],
+    ['video', t('chip.videos'), all.filter(p => p.kind === 'video')],
+    ['fav', t('chip.liked'), all.filter(p => p.likes?.length)],
+  ].filter(x => x[2].length);
   const card = (inner, attrs) => `<button class="album-card" ${attrs}>${inner}</button>`;
   const coverHTML = p => `<div class="cover">${p ? thumbImg(p.files.thumb) : ICON.album}</div>`;
-  t.innerHTML = `<div class="hero"><div><h1>앨범</h1><p>${albums.length}개 · 모든 멤버가 함께 채워요</p></div></div>
+  const newest = l => l.sort((x, y) => C.sortTs(y) - C.sortTs(x))[0];
+  const places = new Set(all.map(p => p.place && C.placeKey(p.place)).filter(Boolean)).size;
+  const tags = C.tagCounts(all).length;
+  el.innerHTML = `<div class="hero"><div><h1>${t('tab.albums')}</h1><p>${albums.length}</p></div></div>
     <div class="albums">
-      ${S.canWrite ? `<button class="album-card new" data-act="newAlbum"><div class="cover">${ICON.plus}</div><b>새 앨범</b><span>&nbsp;</span></button>` : ''}
-      ${albums.map(([id, a]) => { const { cover, count } = albumCover(a, id); return card(`${coverHTML(cover)}<b>${esc(a.name)}</b><span>${count}장</span>`, `data-album="${esc(id)}"`); }).join('')}
+      ${S.canWrite ? `<button class="album-card new" data-act="newAlbum"><div class="cover">${ICON.plus}</div><b>${t('newAlbum.title')}</b><span>&nbsp;</span></button>` : ''}
+      ${albums.map(([id, a]) => { const { cover, count } = albumCover(a, id); return card(`${coverHTML(cover)}<b>${esc(a.name)}</b><span>${count}</span>`, `data-album="${esc(id)}"`); }).join('')}
     </div>
-    ${smart.length || all.length ? '<h2 class="section-title">모아보기</h2>' : ''}
+    ${smart.length || places || tags ? `<h2 class="section-title">${t('smart.title')}</h2>` : ''}
     <div class="albums">
-      ${smart.map(([k, name, l]) => card(`${coverHTML(l.sort((x, y) => C.sortTs(y) - C.sortTs(x))[0])}<b>${name}</b><span>${l.length}</span>`, `data-smart="${k}"`)).join('')}
-      ${all.some(p => p.place) ? card(`${coverHTML(all.filter(p => p.place).sort((x, y) => C.sortTs(y) - C.sortTs(x))[0])}<b>장소</b><span>${new Set(all.map(p => p.place && C.placeKey(p.place)).filter(Boolean)).size}곳</span>`, 'data-smart="place"') : ''}
-      ${C.tagCounts(all).length ? card(`${coverHTML(all.find(p => p.tags?.length))}<b>태그</b><span>${C.tagCounts(all).length}개</span>`, 'data-smart="tag"') : ''}
+      ${smart.map(([k, name, l]) => card(`${coverHTML(newest(l))}<b>${name}</b><span>${l.length}</span>`, `data-smart="${k}"`)).join('')}
+      ${places ? card(`${coverHTML(newest(all.filter(p => p.place)))}<b>${t('smart.places')}</b><span>${places}</span>`, 'data-smart="place"') : ''}
+      ${tags ? card(`${coverHTML(all.find(p => p.tags?.length))}<b>${t('smart.tags')}</b><span>${tags}</span>`, 'data-smart="tag"') : ''}
     </div>`;
-  observeThumbs(t);
+  observeThumbs(el);
 }
 
 function newAlbum(then) {
-  const sh = openSheet(`<h2>새 앨범</h2><label class="field"><span>이름</span><input id="albumName" placeholder="예: 2026 제주 여행" maxlength="60"></label><div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="albumOk">만들기</button></div>`);
+  const sh = openSheet(`<h2>${t('newAlbum.title')}</h2><label class="field"><span>${t('newAlbum.name')}</span><input id="albumName" placeholder="${t('newAlbum.namePh')}" maxlength="60"></label><div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="albumOk">${t('common.create')}</button></div>`);
   const inp = $('#albumName', sh);
   setTimeout(() => inp.focus(), 50);
   const ok = () => {
@@ -960,26 +959,25 @@ function newAlbum(then) {
 
 function albumMenu() {
   const a = S.index.albums[S.album];
-  const sh = openSheet(`<h2>앨범 편집</h2><label class="field"><span>이름</span><input id="albumName" value="${esc(a.name)}" maxlength="60"></label>
-    <div class="actions"><button class="btn btn-danger" id="albumDel">앨범 삭제</button><button class="btn btn-primary" id="albumOk">저장</button></div>
-    <p class="note" style="margin:12px 0 0;padding:0">앨범을 지워도 사진은 보관함에 남아요.</p>`);
+  const sh = openSheet(`<h2>${t('albumEdit.title')}</h2><label class="field"><span>${t('newAlbum.name')}</span><input id="albumName" value="${esc(a.name)}" maxlength="60"></label>
+    <div class="actions"><button class="btn btn-danger" id="albumDel">${t('albumEdit.delete')}</button><button class="btn btn-primary" id="albumOk">${t('common.save')}</button></div>`);
   $('#albumOk', sh).onclick = () => { const n = $('#albumName', sh).value.trim(); if (n && n !== a.name) edit({ op: 'renameAlbum', id: S.album, name: n }); closeSheet(); };
   $('#albumDel', sh).onclick = () => {
-    if (!confirm(`'${a.name}' 앨범을 삭제할까요? 사진은 지워지지 않아요.`)) return;
+    if (!confirm(t('albumEdit.confirm', { name: a.name }))) return;
     const id = S.album; S.album = null; closeSheet(); edit({ op: 'deleteAlbum', id }); showTab('albums');
   };
 }
 
 function pickAlbum(ids) {
   const albums = Object.entries(S.index.albums);
-  const sh = openSheet(`<h2>앨범에 추가</h2><div>${albums.map(([id, a]) => `<button class="list-btn" data-pick="${esc(id)}"><span class="grow">${esc(a.name)}<small>${albumCover(a, id).count}장</small></span></button>`).join('') || '<p class="note" style="margin:0;padding:0">아직 앨범이 없어요.</p>'}
-    <button class="list-btn" data-pick="__new"><span class="grow" style="color:var(--primary)">+ 새 앨범</span></button></div>
-    ${S.album ? `<div class="actions"><button class="btn btn-danger" data-pick="__remove">'${esc(S.index.albums[S.album].name)}'에서 빼기</button></div>` : ''}`);
+  const sh = openSheet(`<h2>${t('pick.title')}</h2><div>${albums.map(([id, a]) => `<button class="list-btn" data-pick="${esc(id)}"><span class="grow">${esc(a.name)}<small>${t('n.photos', { n: albumCover(a, id).count })}</small></span></button>`).join('')}
+    <button class="list-btn" data-pick="__new"><span class="grow" style="color:var(--primary)">+ ${t('newAlbum.title')}</span></button></div>
+    ${S.album ? `<div class="actions"><button class="btn btn-danger" data-pick="__remove">${t('pick.remove', { name: esc(S.index.albums[S.album].name) })}</button></div>` : ''}`);
   sh.onclick = e => {
     const b = e.target.closest('[data-pick]');
     if (!b) return;
     const v = b.dataset.pick;
-    const add = id => { edit({ op: 'albumMembership', ids, album: id, on: true }); toast(`'${S.index.albums[id].name}'에 ${ids.length}장 추가했어요`); setSelecting(false); };
+    const add = id => { edit({ op: 'albumMembership', ids, album: id, on: true }); toast(t('pick.added', { n: ids.length, name: S.index.albums[id].name })); setSelecting(false); };
     if (v === '__new') return newAlbum(add);
     closeSheet();
     if (v === '__remove') { edit({ op: 'albumMembership', ids, album: S.album, on: false }); setSelecting(false); return; }
@@ -990,66 +988,65 @@ function pickAlbum(ids) {
 // ---------------- settings tab ----------------
 
 function renderSettings() {
-  const t = $('#tab-settings');
+  const el = $('#tab-settings');
   const all = photos();
   const u = storageUsage();
   const members = Object.entries(S.index.members || {});
   const counts = {};
   all.forEach(p => { counts[p.by] = (counts[p.by] || 0) + 1; });
   const repoUrl = S.gh.webUrl;
-  const sw = (key, label, sub) => `<div class="row"><div class="grow"><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</div><label class="switch"><input type="checkbox" data-pref="${key}"${prefs[key] ? ' checked' : ''}><span></span></label></div>`;
-  t.innerHTML = `<div class="hero"><div><h1>공유·설정</h1><p>${esc(S.index.title || '')}</p></div></div>
-    <h2 class="section-title">함께하는 사람</h2>
+  const sw = key => `<div class="row"><div class="grow"><b>${t('opt.' + key)}</b></div><label class="switch"><input type="checkbox" data-pref="${key}"${prefs[key] ? ' checked' : ''}><span></span></label></div>`;
+  el.innerHTML = `<div class="hero"><div><h1>${t('tab.settings')}</h1><p>${esc(S.index.title || '')}</p></div></div>
+    <h2 class="section-title">${t('set.people')}</h2>
     <div class="panel">
-      ${members.map(([login, m]) => `<div class="row"><img class="avatar" alt="" src="${avatar(login)}" loading="lazy"><div class="grow"><b>@${esc(login)}${login === S.me?.login ? ' (나)' : ''}</b><small>사진 ${counts[login] || 0}장 · ${fmtDate(m.joinedAt)} 참여</small></div></div>`).join('')}
-      <button class="row" style="width:100%" data-act="invite"><span class="grow" style="text-align:left;color:var(--primary)">+ 친구 초대하기</span></button>
+      ${members.map(([login]) => `<div class="row"><img class="avatar" alt="" src="${avatar(login)}" loading="lazy"><div class="grow"><b>@${esc(login)}${login === S.me?.login ? ` (${t('set.me')})` : ''}</b><small>${t('n.photos', { n: counts[login] || 0 })}</small></div></div>`).join('')}
+      <button class="row" style="width:100%" data-act="invite"><span class="grow" style="text-align:left;color:var(--primary)">+ ${t('invite.title')}</span></button>
     </div>
-    <h2 class="section-title">이 앨범 저장소</h2>
+    <h2 class="section-title">${t('set.album')}</h2>
     <div class="panel">
-      <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? '⚠️ 공개 저장소 — 누구나 사진을 볼 수 있어요' : '비공개 저장소'} · 브랜치 ${esc(S.gh.branch)} · ${S.canWrite ? '쓰기 가능' : '읽기 전용'}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
-      ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>앨범 이름</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">변경</span></button>` : ''}
+      <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? `⚠️ ${t('home.public')}` : t('set.private')} · ${esc(S.gh.branch)}${S.canWrite ? '' : ` · ${t('set.readonly')}`}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
+      ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : ''}
     </div>
-    <h2 class="section-title" id="storageTitle">저장 공간</h2>
+    <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
     <div class="panel">
-      <div class="storage">${ring(u.ratio, u.level)}<div style="min-width:0"><div class="big">남은 ${C.fmtBytes(u.remaining)}</div><div class="sub">${C.fmtBytes(u.used)} / 10GB 사용 · GitHub 권장 최대</div>
-        <div class="legend"><span><i style="background:var(--primary)"></i>원본 ${C.fmtBytes(u.breakdown.original)}</span><span><i style="background:#ff9f0a"></i>라이브 ${C.fmtBytes(u.breakdown.live)}</span><span><i style="background:#30d158"></i>미리보기·썸네일 ${C.fmtBytes(u.breakdown.preview + u.breakdown.thumb)}</span></div></div></div>
-      <div class="row"><div class="grow"><b>GitHub가 잰 저장소 크기</b><small>지운 사진의 이력까지 포함 · 업로드 후 늦게 갱신돼요</small></div><span class="val">${C.fmtBytes(u.repo)}</span></div>
+      <div class="storage">${ring(u.ratio, u.level)}<div style="min-width:0"><div class="big">${t('set.left', { b: C.fmtBytes(u.remaining) })}</div><div class="sub">${C.fmtBytes(u.used)} / 10 GB</div>
+        <div class="legend"><span><i style="background:var(--primary)"></i>${t('set.originals')} ${C.fmtBytes(u.breakdown.original)}</span><span><i style="background:#ff9f0a"></i>${t('set.liveVideo')} ${C.fmtBytes(u.breakdown.live)}</span><span><i style="background:#30d158"></i>${t('set.previews')} ${C.fmtBytes(u.breakdown.preview + u.breakdown.thumb)}</span></div></div></div>
+      <div class="row"><div class="grow"><b>${t('set.githubSize')}</b></div><span class="val">${C.fmtBytes(u.repo)}</span></div>
     </div>
-    <h2 class="section-title">GitHub 저장소 한도</h2>
+    <h2 class="section-title">${t('set.limits')}</h2>
     <div class="panel">${limitRows()}</div>
-    <p class="note">GitHub Docs "Repository limits" 기준이에요. 권장치를 넘어도 바로 막히진 않지만 저장소가 느려질 수 있어요. 100MB 파일 제한만 강제예요. 모임별·연도별로 저장소를 나누면 여유 있게 쓸 수 있어요.</p>
-    <h2 class="section-title">다른 앨범 저장소</h2>
+    <h2 class="section-title">${t('set.albums')}</h2>
     <div class="panel">
-      ${S.spaces.map(s => `<div class="row"><button class="grow" data-space="${esc(s.id)}"><b>${esc(s.owner)}/${esc(s.repo)}</b><small>${s.id === S.space.id ? '<span class="tick">사용 중</span>' : '눌러서 전환'}</small></button><button class="text-btn danger" data-unlink="${esc(s.id)}">연결 해제</button></div>`).join('')}
-      ${S.auth ? '<button class="row row-btn" data-act="home"><span class="grow" style="color:var(--primary)">모든 앨범 · 새 앨범 · 받은 초대</span></button>' : ''}
-      <button class="row" style="width:100%" data-act="addSpace"><span class="grow" style="text-align:left;color:var(--primary)">+ 토큰으로 저장소 연결</span></button>
+      ${S.spaces.filter(x => tokenFor(x)).map(x => `<div class="row"><button class="grow" data-space="${esc(x.id)}"><b>${esc(x.title || x.repo)}</b><small>${esc(x.owner)}/${esc(x.repo)}${x.id === S.space.id ? ` · <span class="tick">✓</span>` : ''}</small></button><button class="text-btn danger" data-unlink="${esc(x.id)}">${t('set.remove')}</button></div>`).join('')}
+      ${S.auth ? `<button class="row row-btn" data-act="home"><span class="grow" style="color:var(--primary)">${t('set.allAlbums')}</span></button>` : ''}
+      <button class="row" style="width:100%" data-act="addSpace"><span class="grow" style="text-align:left;color:var(--primary)">+ ${t('welcome.tokenAdvanced')}</span></button>
     </div>
-    <h2 class="section-title">옵션</h2>
+    <h2 class="section-title">${t('set.options')}</h2>
     <div class="panel">
-      ${sw('autoplayLive', '라이브 포토 자동 재생', '사진을 열면 한 번 움직여요. 길게 누르면 소리와 함께 재생')}
-      ${sw('keepOriginal', '원본 파일도 저장', '끄면 2048px JPEG만 올려서 용량을 아껴요 (라이브 영상은 항상 저장)')}
-      ${sw('geocode', '장소 이름 자동으로 찾기', 'GPS 좌표를 OpenStreetMap으로 보내 동네 이름을 받아와요')}
-      <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>이 기기의 사진 캐시 비우기</b><small>저장소의 사진은 그대로예요</small></span></button>
+      <div class="row"><div class="grow"><b>${t('set.language')}</b></div><select class="lang-select" data-lang aria-label="${t('set.language')}"><option value="en">English</option><option value="ko">한국어</option></select></div>
+      ${sw('autoplayLive')}
+      ${sw('keepOriginal')}
+      ${sw('geocode')}
+      <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>${t('set.clearCache')}</b></span></button>
     </div>
-    <h2 class="section-title">계정</h2>
-    <div class="panel"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b><small>${S.space.token ? '토큰으로 연결된 저장소' : 'GitHub로 로그인됨'}</small></div>${S.auth ? '<button class="text-btn danger" data-act="logout">로그아웃</button>' : ''}</div></div>
-    <p class="note">로그인 정보는 이 브라우저에만 저장돼요. 공용 기기라면 사용 후 로그아웃하세요. GitHub의 Settings → Applications에서 언제든 권한을 해제할 수 있어요.</p>`;
+    <h2 class="section-title">${t('set.account')}</h2>
+    <div class="panel"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b></div>${S.auth ? `<button class="text-btn danger" data-act="logout">${t('auth.signOut')}</button>` : ''}</div></div>`;
+  $('[data-lang]', el).value = lang();
   // draw the ring from empty once it's on screen
-  requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', t).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
+  requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', el).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
 }
 
 function inviteSheet() {
   const base = location.origin + location.pathname;
   const link = `${base}#join=${encodeURIComponent(S.space.owner + '/' + S.space.repo)}${S.space.api ? '&api=' + encodeURIComponent(S.space.api) : ''}${S.me?.login ? '&by=' + encodeURIComponent(S.me.login) : ''}`;
-  const sh = openSheet(`<h2>친구 초대</h2>
-    <label class="field"><span>친구의 GitHub 아이디</span><input id="invUser" placeholder="예: octocat" autocapitalize="off" spellcheck="false" enterkeyhint="send"></label>
-    <button class="btn btn-primary btn-block" id="invSend">초대 보내기</button>
-    <p class="note" style="margin:10px 4px 0;padding:0">친구가 이 앱에 GitHub로 로그인하면 초대가 보이고, <b>수락</b> 한 번이면 같은 앨범을 함께 써요. GitHub 계정이 없다면 github.com에서 무료로 가입하면 돼요.</p>
-    <h2 style="font-size:17px;margin:22px 0 6px">함께하는 사람</h2>
-    <div id="invList"><p class="note" style="margin:0;padding:0">불러오는 중…</p></div>
-    <details class="guide" style="margin-top:16px"><summary>초대 링크 보내기</summary><div style="padding:0 16px 14px">
-      <label class="field"><span>친구가 이 링크로 들어와 로그인하면 이 앨범이 바로 열려요 (초대는 위에서 먼저 보내야 해요)</span><input readonly value="${esc(link)}" id="inviteLink"></label>
-      <div class="actions" style="margin-top:4px"><button class="btn btn-quiet" id="copyLink">링크 복사</button>${navigator.share ? '<button class="btn btn-quiet" id="shareLink">공유하기</button>' : ''}</div></div></details>`);
+  const sh = openSheet(`<h2>${t('invite.title')}</h2>
+    <label class="field"><span>${t('invite.username')}</span><input id="invUser" placeholder="octocat" autocapitalize="off" spellcheck="false" enterkeyhint="send"></label>
+    <button class="btn btn-primary btn-block" id="invSend">${t('invite.send')}</button>
+    <h2 style="font-size:17px;margin:22px 0 6px">${t('set.people')}</h2>
+    <div id="invList"><p class="note" style="margin:0;padding:0">${t('sync.loading')}</p></div>
+    <details class="guide" style="margin-top:16px"><summary>${t('invite.link')}</summary><div style="padding:0 16px 14px">
+      <input readonly value="${esc(link)}" id="inviteLink" class="link-field">
+      <div class="actions" style="margin-top:10px"><button class="btn btn-quiet" id="copyLink">${t('invite.copy')}</button>${navigator.share ? `<button class="btn btn-quiet" id="shareLink">${t('invite.share')}</button>` : ''}</div></div></details>`);
   const list = async () => {
     const [col, inv] = await Promise.allSettled([S.gh.collaborators(), S.gh.pendingInvites()]);
     const people = col.status === 'fulfilled' ? col.value : [];
@@ -1057,24 +1054,24 @@ function inviteSheet() {
     const box = $('#invList', sh);
     if (!box) return;
     box.innerHTML = `<div class="panel" style="margin:0">${[
-      ...people.map(u => `<div class="row"><img class="avatar" alt="" src="${esc(u.avatar_url || avatar(u.login))}"><div class="grow"><b>@${esc(u.login)}${u.login === S.me?.login ? ' (나)' : ''}</b><small>${u.login === S.space.owner ? '앨범 주인' : u.permissions?.push ? '올리기·편집 가능' : '보기만 가능'}</small></div></div>`),
-      ...pending.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.invitee?.avatar_url || avatar(i.invitee?.login || 'ghost'))}"><div class="grow"><b>@${esc(i.invitee?.login || '')}</b><small>초대 수락 대기 중</small></div><button class="text-btn danger" data-cancel="${i.id}">취소</button></div>`),
-    ].join('') || '<div class="row"><div class="grow"><small>목록을 볼 권한이 없어요 (저장소 주인만 볼 수 있어요)</small></div></div>'}</div>`;
+      ...people.map(u => `<div class="row"><img class="avatar" alt="" src="${esc(u.avatar_url || avatar(u.login))}"><div class="grow"><b>@${esc(u.login)}${u.login === S.me?.login ? ` (${t('set.me')})` : ''}</b><small>${t(u.login === S.space.owner ? 'invite.owner' : u.permissions?.push ? 'invite.canEdit' : 'invite.viewOnly')}</small></div></div>`),
+      ...pending.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.invitee?.avatar_url || avatar(i.invitee?.login || 'ghost'))}"><div class="grow"><b>@${esc(i.invitee?.login || '')}</b><small>${t('invite.pending')}</small></div><button class="text-btn danger" data-cancel="${i.id}">${t('common.cancel')}</button></div>`),
+    ].join('') || `<div class="row"><div class="grow"><small>${t('invite.noAccess')}</small></div></div>`}</div>`;
   };
   list();
   const send = async () => {
     const u = $('#invUser', sh).value.trim().replace(/^@/, '');
-    if (!/^[A-Za-z0-9-]{1,39}$/.test(u)) return toast('GitHub 아이디를 확인해 주세요');
+    if (!/^[A-Za-z0-9-]{1,39}$/.test(u)) return toast(t('invite.badUser'));
     const btn = $('#invSend', sh);
-    btn.disabled = true; btn.textContent = '보내는 중…';
+    btn.disabled = true; btn.textContent = t('invite.sending');
     try {
       const r = await S.gh.invite(u);
-      toast(r ? `@${u}님에게 초대를 보냈어요` : `@${u}님은 이미 함께하고 있어요`);
+      toast(t(r ? 'invite.sent' : 'invite.already', { u: '@' + u }));
       $('#invUser', sh).value = '';
       list();
     } catch (e) {
-      toast(e.status === 404 ? `@${u} — 그런 GitHub 아이디가 없어요` : e.status === 403 ? '저장소 주인만 친구를 초대할 수 있어요' : errMsg(e), 4000);
-    } finally { btn.disabled = false; btn.textContent = '초대 보내기'; }
+      toast(e.status === 404 ? t('invite.noUser', { u: '@' + u }) : e.status === 403 ? t('invite.ownerOnly') : errMsg(e), 4000);
+    } finally { btn.disabled = false; btn.textContent = t('invite.send'); }
   };
   $('#invSend', sh).onclick = send;
   $('#invUser', sh).onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) send(); };
@@ -1084,16 +1081,17 @@ function inviteSheet() {
     try { await S.gh.cancelInvite(c.dataset.cancel); list(); } catch (ex) { toast(errMsg(ex)); }
   });
   $('#copyLink', sh).onclick = async () => {
-    try { await navigator.clipboard.writeText(link); toast('링크를 복사했어요'); } catch { $('#inviteLink', sh).select(); document.execCommand('copy'); toast('링크를 복사했어요'); }
+    try { await navigator.clipboard.writeText(link); } catch { $('#inviteLink', sh).select(); document.execCommand('copy'); }
+    toast(t('invite.copied'));
   };
-  $('#shareLink', sh)?.addEventListener('click', () => navigator.share({ title: 'Moa 공유앨범 초대', text: `'${S.index.title}' 앨범에 초대할게요`, url: link }).catch(() => {}));
+  $('#shareLink', sh)?.addEventListener('click', () => navigator.share({ title: 'Moa', text: S.index.title, url: link }).catch(() => {}));
 }
 
 function spaceSheet() {
   const recent = S.spaces.filter(x => tokenFor(x));
-  const sh = openSheet(`<h2>앨범</h2><div>${recent.map(s => `<button class="list-btn" data-space="${esc(s.id)}"><span class="grow">${esc(s.title || s.repo)}<small>${esc(s.owner)}/${esc(s.repo)}</small></span>${s.id === S.space?.id ? '<span class="tick">✓</span>' : ''}</button>`).join('')}
-    ${S.auth ? '<button class="list-btn" data-act="home"><span class="grow" style="color:var(--primary)">모든 앨범 · 새 앨범 · 받은 초대</span></button>' : ''}
-    <button class="list-btn" data-act="addSpace"><span class="grow" style="color:${S.auth ? 'var(--muted)' : 'var(--primary)'}">+ ${S.auth ? '토큰으로 저장소 연결' : '저장소 추가'}</span></button></div>`);
+  const sh = openSheet(`<h2>${t('home.title')}</h2><div>${recent.map(x => `<button class="list-btn" data-space="${esc(x.id)}"><span class="grow">${esc(x.title || x.repo)}<small>${esc(x.owner)}/${esc(x.repo)}</small></span>${x.id === S.space?.id ? '<span class="tick">✓</span>' : ''}</button>`).join('')}
+    ${S.auth ? `<button class="list-btn" data-act="home"><span class="grow" style="color:var(--primary)">${t('set.allAlbums')}</span></button>` : ''}
+    <button class="list-btn" data-act="addSpace"><span class="grow" style="color:${S.auth ? 'var(--muted)' : 'var(--primary)'}">+ ${t('welcome.tokenAdvanced')}</span></button></div>`);
   sh.onclick = e => {
     const b = e.target.closest('[data-space],[data-act]');
     if (!b) return;
@@ -1111,29 +1109,29 @@ function setSelecting(on) {
   S.selecting = on;
   if (!on) S.selected.clear();
   $('#app').classList.toggle('selecting', on);
-  $('#selectBtn').textContent = on ? '완료' : '선택';
+  $('#selectBtn').textContent = t(on ? 'common.done' : 'select');
   $('#selectBar').hidden = !on;
   $('#tabbar').hidden = on;
   $$('.tile.sel').forEach(t => { if (!S.selected.has(t.dataset.id)) t.classList.remove('sel'); });
   updateSelCount();
 }
-function updateSelCount() { $('#selCount').textContent = `${S.selected.size}개 선택`; }
+function updateSelCount() { $('#selCount').textContent = t('selected', { n: S.selected.size }); }
 
 function tagSheet(ids) {
   const existing = C.tagCounts(photos()).slice(0, 24);
-  const sh = openSheet(`<h2>태그 달기 <small style="font-size:14px;color:var(--muted);font-weight:400">${ids.length}장</small></h2>
-    <label class="field"><span>새 태그 (쉼표로 여러 개)</span><input id="tagIn" placeholder="예: 제주, 바다, 가족" enterkeyhint="done"></label>
-    ${existing.length ? `<div class="tag-suggest">${existing.map(([t]) => `<button class="chip" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
-    <div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="tagOk">추가</button></div>`);
+  const sh = openSheet(`<h2>${t('tags.title')} <small>${t('n.photos', { n: ids.length })}</small></h2>
+    <label class="field"><span>${t('tags.new')}</span><input id="tagIn" placeholder="${t('tags.ph')}" enterkeyhint="done"></label>
+    ${existing.length ? `<div class="tag-suggest">${existing.map(([tg]) => `<button class="chip" data-t="${esc(tg)}">#${esc(tg)}</button>`).join('')}</div>` : ''}
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="tagOk">${t('common.add')}</button></div>`);
   const inp = $('#tagIn', sh);
   setTimeout(() => inp.focus(), 50);
   sh.addEventListener('click', e => { const c = e.target.closest('[data-t]'); if (c) c.classList.toggle('on'); });
   const ok = () => {
     const tags = [...inp.value.split(/[,，]/), ...$$('.chip.on', sh).map(c => c.dataset.t)].map(C.normalizeTag).filter(Boolean);
     if (!tags.length) return inp.focus();
-    for (const t of new Set(tags)) edit({ op: 'tag', ids, tag: t, on: true });
+    for (const tg of new Set(tags)) edit({ op: 'tag', ids, tag: tg, on: true });
     closeSheet();
-    toast(`${ids.length}장에 태그를 달았어요`);
+    toast(t('tags.done', { n: ids.length }));
     setSelecting(false);
   };
   $('#tagOk', sh).onclick = ok;
@@ -1141,7 +1139,7 @@ function tagSheet(ids) {
 }
 
 function deletePhotos(ids, after) {
-  if (!confirm(`${ids.length}장을 삭제할까요? 모든 멤버의 앨범에서 사라져요.`)) return false;
+  if (!confirm(t('delete.confirm', { n: ids.length }))) return false;
   edit({ op: 'deletePhotos', ids });
   after?.();
   return true;
@@ -1262,8 +1260,8 @@ function refreshViewer() {
 function viewerChrome() {
   const p = V.p;
   const day = (p.takenAt || '').slice(0, 10);
-  $('#vDate').textContent = /^\d{4}-\d{2}-\d{2}$/.test(day) ? C.fmtDay(day).replace(/ \S+요일$/, '') : '';
-  $('#vSub').textContent = [C.fmtTime(p.takenAt), p.place?.name || p.place?.label].filter(Boolean).join(' · ');
+  $('#vDate').textContent = /^\d{4}-\d{2}-\d{2}$/.test(day) ? fmtDay(day, false) : '';
+  $('#vSub').textContent = [fmtTime(p.takenAt), p.place?.name || p.place?.label].filter(Boolean).join(' · ');
   const liked = p.likes?.includes(S.me?.login);
   $('#vLike').classList.toggle('on', !!liked);
   $('#vLike span').textContent = p.likes?.length || '';
@@ -1295,7 +1293,7 @@ async function showCurrent() {
       const u = await mediaURL(p.files.original, playableType(p.mime));
       if (token !== V.token) return;
       vid.src = u;
-    } catch (e) { toast('동영상을 불러오지 못했어요'); }
+    } catch (e) { toast(t('viewer.videoFailed')); }
     spin.classList.remove('on');
   } else {
     vid.hidden = true;
@@ -1313,7 +1311,7 @@ async function showCurrent() {
       await img.decode().catch(() => {});
       if (token !== V.token) return;
       img.style.filter = '';
-    } catch { toast('사진을 불러오지 못했어요'); }
+    } catch { toast(t('viewer.photoFailed')); }
     spin.classList.remove('on');
     if (p.files.live) {
       const lu = mediaURL(p.files.live, playableType(p.liveMime || 'video/quicktime'));
@@ -1348,7 +1346,7 @@ async function playLive(sound) {
   if (!p?.files?.live) return;
   const token = V.token;
   let u;
-  try { u = await mediaURL(p.files.live, playableType(p.liveMime || 'video/quicktime')); } catch { return toast('라이브 영상을 불러오지 못했어요'); }
+  try { u = await mediaURL(p.files.live, playableType(p.liveMime || 'video/quicktime')); } catch { return toast(t('viewer.liveFailed')); }
   if (token !== V.token) return;
   const v = $('#vLive');
   if (v.dataset.src !== u) { v.src = u; v.dataset.src = u; }
@@ -1358,7 +1356,7 @@ async function playLive(sound) {
     await v.play();
     if (token === V.token) stage().classList.add('live-on');
   } catch (e) {
-    if (sound && e.name !== 'AbortError') toast('이 브라우저는 라이브 영상(HEVC)을 재생하지 못할 수 있어요');
+    if (sound && e.name !== 'AbortError') toast(t('viewer.hevc'));
   }
 }
 
@@ -1484,7 +1482,7 @@ function toggleInfo(force) {
 
 async function download(p) {
   const path = p.files.original || p.files.preview;
-  toast('받는 중…');
+  toast(t('dl.start'));
   try {
     const blob = await S.gh.media(path, { cache: !!p.files.preview && path === p.files.preview });
     const a = document.createElement('a');
@@ -1492,7 +1490,7 @@ async function download(p) {
     a.download = p.files.original ? (p.name || path.split('/').pop()) : C.baseOf(p.name || p.id) + '.jpg';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-  } catch (e) { toast('다운로드 실패: ' + errMsg(e)); }
+  } catch (e) { toast(t('dl.failed', { e: errMsg(e) })); }
 }
 
 function renderInfo() {
@@ -1501,44 +1499,43 @@ function renderInfo() {
   const box = $('#vInfo');
   const scroll = box.scrollTop;
   const albums = Object.entries(S.index.albums);
-  const allTags = C.tagCounts(photos()).map(([t]) => t).filter(t => !(p.tags || []).includes(t)).slice(0, 10);
+  const allTags = C.tagCounts(photos()).map(([tg]) => tg).filter(tg => !(p.tags || []).includes(tg)).slice(0, 10);
   const day = (p.takenAt || '').slice(0, 10);
-  const srcLabel = { exif: '사진 정보(EXIF) 기준', video: '동영상 정보 기준', file: '파일 수정 시각 기준 (촬영 정보 없음)', manual: '직접 수정함' }[p.dateSource] || '';
   const cam = [p.camera?.model || p.camera?.make, p.camera?.lens && p.camera.lens.replace(p.camera.model || '', '').trim()].filter(Boolean).join(' · ');
   const sizes = [p.w && p.h ? `${p.w} × ${p.h}` : '', p.size ? C.fmtBytes(p.size) : '', p.duration ? fmtDur(p.duration) : '', p.name].filter(Boolean).join(' · ');
   const w = S.canWrite;
   box.innerHTML = `<div class="grab"></div>
-    ${w ? `<textarea id="iCap" rows="1" placeholder="설명 추가…" maxlength="500">${esc(p.caption || '')}</textarea>` : p.caption ? `<div class="kv">${esc(p.caption)}</div>` : ''}
-    <h4>태그</h4>
-    <div class="tagrow">${(p.tags || []).map(t => `<span class="chip">#${esc(t)}${w ? `<button data-i="untag" data-t="${esc(t)}" aria-label="태그 삭제">✕</button>` : ''}</span>`).join('') || '<span class="kv"><small>아직 태그가 없어요</small></span>'}</div>
-    ${w ? `<input type="text" id="iTag" placeholder="태그 추가 후 Enter" enterkeyhint="done" autocomplete="off">
-    ${allTags.length ? `<div class="tag-suggest">${allTags.map(t => `<button class="chip" data-i="tag" data-t="${esc(t)}">+ ${esc(t)}</button>`).join('')}</div>` : ''}` : ''}
-    <h4>날짜와 시간 ${w ? '<button data-i="editDate">수정</button>' : ''}</h4>
-    <div class="kv" id="iDate">${/^\d{4}-\d{2}-\d{2}$/.test(day) ? C.fmtDay(day) : '날짜 없음'} ${C.fmtTime(p.takenAt)}<small>${p.tz ? 'UTC' + p.tz + ' · ' : ''}${srcLabel}</small></div>
-    <h4>장소 ${w ? '<button data-i="editPlace">수정</button>' : ''}</h4>
-    <div id="iPlace">${p.gps ? `<div class="kv">${esc(p.place?.name || p.place?.label || '장소 이름을 찾는 중…')}<small>${esc([p.place?.name && p.place?.label, p.place?.country].filter(Boolean).join(', ') || `${p.gps.lat.toFixed(4)}, ${p.gps.lng.toFixed(4)}`)}</small></div><div class="mini-map" id="iMap"></div><button class="text-btn" data-i="onMap" style="padding-left:0;margin-top:4px">보관함 지도에서 보기</button>` : '<div class="kv"><small>위치 정보가 없어요</small></div>'}</div>
-    <h4>앨범</h4>
-    <div>${albums.map(([id, a]) => `<label class="alb"><input type="checkbox" data-i="alb" data-a="${esc(id)}"${(p.albums || []).includes(id) ? ' checked' : ''}${w ? '' : ' disabled'}>${esc(a.name)}</label>`).join('')}${w ? '<button class="text-btn" data-i="newAlbum" style="padding-left:0">+ 새 앨범</button>' : ''}</div>
-    ${p.likes?.length ? `<h4>좋아요 ${p.likes.length}</h4><div class="kv">${p.likes.map(l => '@' + esc(l)).join(', ')}</div>` : ''}
-    <h4>댓글 ${p.comments?.length || ''}</h4>
-    <div>${(p.comments || []).map(c => `<div class="cmt"><b>@${esc(c.by)}</b><small>${fmtDate(c.at)}</small>${c.by === S.me?.login ? `<button class="del" data-i="uncomment" data-c="${esc(c.id)}">삭제</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')}</div>
-    ${w ? '<input type="text" id="iCmt" placeholder="댓글 달기…" enterkeyhint="send" maxlength="500" style="margin-top:8px">' : ''}
-    <h4>정보</h4>
+    ${w ? `<textarea id="iCap" rows="1" placeholder="${t('info.caption')}" maxlength="500">${esc(p.caption || '')}</textarea>` : p.caption ? `<div class="kv">${esc(p.caption)}</div>` : ''}
+    <h4>${t('info.tags')}</h4>
+    ${p.tags?.length ? `<div class="tagrow">${p.tags.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
+    ${w ? `<input type="text" id="iTag" placeholder="${t('info.addTag')}" enterkeyhint="done" autocomplete="off">
+    ${allTags.length ? `<div class="tag-suggest">${allTags.map(tg => `<button class="chip" data-i="tag" data-t="${esc(tg)}">+ ${esc(tg)}</button>`).join('')}</div>` : ''}` : ''}
+    <h4>${t('info.date')} ${w ? `<button data-i="editDate">${t('common.edit')}</button>` : ''}</h4>
+    <div class="kv" id="iDate">${/^\d{4}-\d{2}-\d{2}$/.test(day) ? fmtDay(day) : '—'} ${fmtTime(p.takenAt)}${p.tz ? `<small>UTC${p.tz}</small>` : ''}</div>
+    <h4>${t('info.place')} ${w ? `<button data-i="editPlace">${t('common.edit')}</button>` : ''}</h4>
+    <div id="iPlace">${p.gps ? `<div class="kv">${esc(p.place?.name || p.place?.label || '…')}<small>${esc([p.place?.name && p.place?.label, p.place?.country].filter(Boolean).join(', ') || `${p.gps.lat.toFixed(4)}, ${p.gps.lng.toFixed(4)}`)}</small></div><div class="mini-map" id="iMap"></div><button class="text-btn" data-i="onMap" style="padding-left:0;margin-top:4px">${t('info.onMap')}</button>` : '<div class="kv"><small>—</small></div>'}</div>
+    <h4>${t('tab.albums')}</h4>
+    <div>${albums.map(([id, a]) => `<label class="alb"><input type="checkbox" data-i="alb" data-a="${esc(id)}"${(p.albums || []).includes(id) ? ' checked' : ''}${w ? '' : ' disabled'}>${esc(a.name)}</label>`).join('')}${w ? `<button class="text-btn" data-i="newAlbum" style="padding-left:0">+ ${t('newAlbum.title')}</button>` : ''}</div>
+    ${p.likes?.length ? `<h4>${t('chip.liked')} ${p.likes.length}</h4><div class="kv">${p.likes.map(l => '@' + esc(l)).join(', ')}</div>` : ''}
+    <h4>${t('info.comments')} ${p.comments?.length || ''}</h4>
+    <div>${(p.comments || []).map(c => `<div class="cmt"><b>@${esc(c.by)}</b><small>${fmtDate(c.at)}</small>${c.by === S.me?.login ? `<button class="del" data-i="uncomment" data-c="${esc(c.id)}">${t('common.delete')}</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')}</div>
+    ${w ? `<input type="text" id="iCmt" placeholder="${t('info.addComment')}" enterkeyhint="send" maxlength="500" style="margin-top:8px">` : ''}
+    <h4>${t('info.details')}</h4>
     ${cam ? `<div class="kv">${esc(cam)}</div>` : ''}
     <div class="kv"><small>${esc(sizes)}</small></div>
-    <div class="kv" style="margin-top:6px">@${esc(p.by || '')} 님이 올림<small>${fmtDate(p.uploadedAt)}${p.files.live ? ' · 라이브 포토' : ''}${p.files.original ? '' : ' · 원본 없이 JPEG만 저장됨'}</small></div>
+    <div class="kv" style="margin-top:6px">@${esc(p.by || '')}<small>${fmtDate(p.uploadedAt)}</small></div>
     <div class="danger-zone">
-      <button class="btn btn-quiet btn-sm" data-i="download">${p.files.original ? '원본 받기' : 'JPEG 받기'}</button>
-      ${p.files.live ? '<button class="btn btn-quiet btn-sm" data-i="downloadLive">라이브 영상</button>' : ''}
-      ${w && S.album ? '<button class="btn btn-quiet btn-sm" data-i="cover">앨범 커버로</button>' : ''}
-      ${w ? '<button class="btn btn-danger btn-sm" data-i="delete">삭제</button>' : ''}
+      <button class="btn btn-quiet btn-sm" data-i="download">${t(p.files.original ? 'info.dlOriginal' : 'info.dlJpeg')}</button>
+      ${p.files.live ? `<button class="btn btn-quiet btn-sm" data-i="downloadLive">${t('info.dlLive')}</button>` : ''}
+      ${w && S.album ? `<button class="btn btn-quiet btn-sm" data-i="cover">${t('info.setCover')}</button>` : ''}
+      ${w ? `<button class="btn btn-danger btn-sm" data-i="delete">${t('common.delete')}</button>` : ''}
     </div>`;
   box.scrollTop = scroll;
 
   V.miniMap?.remove(); V.miniMap = null;
   if (p.gps && window.L && $('#iMap')) {
-    const m = V.miniMap = L.map('iMap', { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, keyboard: false, boxZoom: false }).setView([p.gps.lat, p.gps.lng], 14);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(m);
+    const m = V.miniMap = L.map('iMap', { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, keyboard: false, boxZoom: false }).setView([p.gps.lat, p.gps.lng], 14);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
     L.circleMarker([p.gps.lat, p.gps.lng], { radius: 7, color: '#fff', weight: 2.5, fillColor: '#2997ff', fillOpacity: 1 }).addTo(m);
   }
 
@@ -1574,7 +1571,7 @@ function renderInfo() {
       case 'onMap': closeViewer(); S.view = 'map'; S.mapFocus = [p.gps.lat, p.gps.lng]; S.album = null; S.filter = { kind: '', tag: '', q: '' }; showTab('photos'); return;
       case 'download': return download(p);
       case 'downloadLive': return download({ ...p, name: C.baseOf(p.name || p.id) + '.' + C.extOf(p.files.live), files: { original: p.files.live } });
-      case 'cover': edit({ op: 'setCover', album: S.album, photo: p.id }); return toast('앨범 커버로 정했어요');
+      case 'cover': edit({ op: 'setCover', album: S.album, photo: p.id }); return toast(t('info.coverSet'));
       case 'delete': {
         const id = p.id;
         deletePhotos([id], () => { if (V.list.length <= 1) closeViewer(); });
@@ -1585,7 +1582,7 @@ function renderInfo() {
 
 function editDate(p) {
   const el = $('#iDate');
-  el.innerHTML = `<input type="datetime-local" step="1" id="iDateIn" value="${esc((p.takenAt || '').slice(0, 19))}"><div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-quiet btn-sm" id="iDateCancel">취소</button><button class="btn btn-primary btn-sm" id="iDateOk">저장</button></div>`;
+  el.innerHTML = `<input type="datetime-local" step="1" id="iDateIn" value="${esc((p.takenAt || '').slice(0, 19))}"><div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-quiet btn-sm" id="iDateCancel">${t('common.cancel')}</button><button class="btn btn-primary btn-sm" id="iDateOk">${t('common.save')}</button></div>`;
   $('#iDateCancel').onclick = () => renderInfo();
   $('#iDateOk').onclick = () => {
     let v = $('#iDateIn').value;
@@ -1599,8 +1596,8 @@ function editDate(p) {
 function editPlace(p) {
   const el = $('#iPlace');
   V.miniMap?.remove(); V.miniMap = null;
-  el.innerHTML = `<input type="search" id="iPlaceIn" placeholder="장소 검색 (예: 성산일출봉)" enterkeyhint="search"><div id="iPlaceRes" style="margin-top:6px"></div>
-    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-quiet btn-sm" id="iPlaceCancel">취소</button>${p.gps ? '<button class="btn btn-danger btn-sm" id="iPlaceClear">위치 지우기</button>' : ''}</div>`;
+  el.innerHTML = `<input type="search" id="iPlaceIn" placeholder="${t('place.search')}" enterkeyhint="search"><div id="iPlaceRes" style="margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-quiet btn-sm" id="iPlaceCancel">${t('common.cancel')}</button>${p.gps ? `<button class="btn btn-danger btn-sm" id="iPlaceClear">${t('place.clear')}</button>` : ''}</div>`;
   const inp = $('#iPlaceIn');
   inp.focus();
   $('#iPlaceCancel').onclick = () => renderInfo();
@@ -1609,9 +1606,9 @@ function editPlace(p) {
   inp.onkeydown = async e => {
     if (e.key !== 'Enter' || e.isComposing) return;
     const res = $('#iPlaceRes');
-    res.innerHTML = '<div class="kv"><small>찾는 중…</small></div>';
+    res.innerHTML = `<div class="kv"><small>${t('place.searching')}</small></div>`;
     try { results = await searchPlaces(inp.value); } catch { results = []; }
-    res.innerHTML = results.map((r, i) => `<button class="result" data-r="${i}">${esc(r.place?.name || r.place?.label || r.display)}<small>${esc(r.display)}</small></button>`).join('') || '<div class="kv"><small>결과가 없어요</small></div>';
+    res.innerHTML = results.map((r, i) => `<button class="result" data-r="${i}">${esc(r.place?.name || r.place?.label || r.display)}<small>${esc(r.display)}</small></button>`).join('') || `<div class="kv"><small>${t('place.noResults')}</small></div>`;
   };
   $('#iPlaceRes').onclick = e => {
     const b = e.target.closest('[data-r]');
@@ -1628,16 +1625,16 @@ function editPlace(p) {
 const U = { running: false, entries: [], done: 0, failed: 0, total: 0 };
 
 async function handleFiles(fileList) {
-  if (!S.index) return toast('먼저 앨범을 만들어주세요');
-  if (!S.canWrite) return toast('이 저장소는 읽기 전용이에요');
-  if (U.running) return toast('업로드가 끝난 뒤에 더 올릴 수 있어요');
+  if (!S.index) return;
+  if (!S.canWrite) return toast(t('readonly'));
+  if (U.running) return toast(t('up.busy'));
   const files = [...fileList].filter(f => !/\.(aae|xmp|json)$/i.test(f.name));
   if (!files.length) return;
-  const sh = openSheet(`<h2>사진 확인 중</h2><p class="up-summary" id="anaText">0 / ${files.length}</p><div class="progress"><i id="anaBar"></i></div>`, { kind: 'upload' });
+  const sh = openSheet(`<h2>${t('up.reading')}</h2><p class="up-summary" id="anaText">0 / ${files.length}</p><div class="progress"><i id="anaBar"></i></div>`, { kind: 'upload' });
   const items = [];
   for (let i = 0; i < files.length; i++) {
     items.push(await analyzeFile(files[i], 'f' + i));
-    if ($('#anaBar', sh)) { $('#anaBar', sh).style.width = `${((i + 1) / files.length) * 100}%`; $('#anaText', sh).textContent = `${i + 1} / ${files.length}`; }
+    if ($('#anaBar', sh)) { $('#anaBar', sh).style.transform = `scaleX(${(i + 1) / files.length})`; $('#anaText', sh).textContent = `${i + 1} / ${files.length}`; }
   }
   const entries = buildEntries(items);
   const hashes = new Set(photos().map(p => p.hash).filter(Boolean));
@@ -1647,7 +1644,7 @@ async function handleFiles(fileList) {
     if (e.main.hash) seen.add(e.main.hash);
     e.skip = !!e.main.error || e.dup;
     e.main.tooBig = !!e.main.tooBig;
-    e.status = e.skip ? (e.main.error || '이미 있음') : '';
+    e.status = e.skip ? (e.main.error ? { k: 'err', text: e.main.error } : { k: 'dup' }) : null;
   }
   U.entries = entries;
   showUploadSheet(true);
@@ -1658,41 +1655,31 @@ function showUploadSheet(review) {
   const go = E.filter(e => !e.skip);
   const n = k => go.filter(k).length;
   const summary = [
-    `사진 ${n(e => e.main.kind === 'photo')}`,
-    n(e => e.live) ? `라이브 ${n(e => e.live)}` : '',
-    n(e => e.main.kind === 'video') ? `동영상 ${n(e => e.main.kind === 'video')}` : '',
-    `위치 있음 ${n(e => e.main.meta.gps)}`,
-    E.filter(e => e.dup).length ? `중복 ${E.filter(e => e.dup).length}개 건너뜀` : '',
-    E.filter(e => e.main.error).length ? `불가 ${E.filter(e => e.main.error).length}` : '',
+    t('hero.photos', { n: n(e => e.main.kind === 'photo') }),
+    n(e => e.live) ? t('hero.live', { n: n(e => e.live) }) : '',
+    n(e => e.main.kind === 'video') ? t('hero.videos', { n: n(e => e.main.kind === 'video') }) : '',
+    t('up.withLocation', { n: n(e => e.main.meta.gps) }),
+    E.filter(e => e.dup).length ? t('up.dups', { n: E.filter(e => e.dup).length }) : '',
+    E.filter(e => e.main.error).length ? t('up.errors', { n: E.filter(e => e.main.error).length }) : '',
   ].filter(Boolean).join(' · ');
   const albums = Object.entries(S.index.albums);
   const thumbs = E.slice(0, 200).map(e => {
     const m = e.main;
     e.url ||= m.kind === 'photo' ? URL.createObjectURL(m.file) : '';
     return `<div class="up-item${e.skip ? ' skip' : ''}" id="up-${m.key}">${e.url ? `<img alt="" src="${e.url}" loading="lazy">` : ''}
-      <div class="flags">${Math.max(m.size, e.live?.size || 0) >= LIM.LIMITS.apiUpload ? '<b class="big">대용량</b>' : ''}${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? '<b class="gps">위치</b>' : ''}</div>
-      <span class="nm">${esc(m.name)}</span>${e.status ? `<span class="st${e.status === '완료' ? ' done' : e.failed ? ' fail' : ''}">${esc(e.status)}</span>` : ''}</div>`;
+      <div class="flags">${Math.max(m.size, e.live?.size || 0) >= LIM.LIMITS.apiUpload ? `<b class="big">${t('up.large')}</b>` : ''}${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? `<b class="gps">${t('info.place')}</b>` : ''}</div>
+      <span class="nm">${esc(m.name)}</span>${statusHTML(e)}</div>`;
   }).join('');
-  const noMeta = go.filter(e => e.main.kind === 'photo' && e.main.meta.dateSource === 'file').length;
-  const sh = openSheet(`<h2>${review ? `${go.length}개 올리기` : '업로드 중'} ${review ? '' : `<small style="font-size:14px;color:var(--muted);font-weight:400" id="upCount">${U.done}/${U.total}</small>`}</h2>
+  const sh = openSheet(`<h2>${review ? t('up.title', { n: go.length }) : t('up.uploading')} ${review ? '' : `<small id="upCount">${U.done}/${U.total}</small>`}</h2>
     <p class="up-summary">${summary}</p>
     ${review ? `<div id="upPlan">${uploadPlanHTML(E, prefs.keepOriginal).html}</div>` : ''}
-    ${!review ? `<div class="progress"><i id="upBar" style="width:${U.total ? (U.done + U.failed) / U.total * 100 : 0}%"></i></div><p class="note" style="margin:6px 0 14px;padding:0">창을 닫아도 계속 올라가요. 앱을 닫지는 마세요.</p>` : ''}
-    <div class="up-list">${thumbs}</div>${E.length > 200 ? `<p class="note" style="margin:0 0 12px;padding:0">외 ${E.length - 200}개</p>` : ''}
+    ${!review ? `<div class="progress"><i id="upBar" style="transform:scaleX(${U.total ? (U.done + U.failed) / U.total : 0})"></i></div>` : ''}
+    <div class="up-list">${thumbs}</div>${E.length > 200 ? `<p class="up-summary">+${E.length - 200}</p>` : ''}
     ${review ? `
-      ${noMeta ? `<p class="note" style="margin:0 0 12px;padding:0">⚠️ ${noMeta}장은 촬영 정보(EXIF)가 없어 파일 시각으로 정렬돼요.</p>` : ''}
-      <label class="field"><span>앨범</span><select id="upAlbum"><option value="">보관함에만</option>${albums.map(([id, a]) => `<option value="${esc(id)}"${id === S.album ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-      <label class="field"><span>태그 (선택, 쉼표로 여러 개)</span><input id="upTags" placeholder="예: 제주, 가족여행"></label>
-      <div class="row" style="padding:4px 4px 12px;border:0"><div class="grow"><b style="font-size:15px">원본 파일도 저장</b><small>끄면 2048px JPEG만 저장해요</small></div><label class="switch"><input type="checkbox" id="upOrig"${prefs.keepOriginal ? ' checked' : ''}><span></span></label></div>
-      <details class="guide" style="margin:0 0 4px"><summary>아이폰 라이브 포토·위치를 온전히 올리려면</summary>
-        <ol class="steps">
-          <li>사진 앱에서 사진을 고른 뒤 <b>공유</b> → 위쪽 <b>옵션</b> → <b>모든 사진 데이터</b>를 켜고(위치도 켜기) → <b>파일에 저장</b>.</li>
-          <li>Moa에서 업로드 → <b>파일 선택/찾아보기</b> → 저장한 폴더에서 <code>HEIC</code>와 <code>MOV</code>를 함께 선택.</li>
-          <li>이름이 같은 사진+영상(예: IMG_1234.HEIC + IMG_1234.MOV)이나 같은 라이브 포토 ID를 가진 파일은 자동으로 라이브 포토로 묶여요.</li>
-        </ol>
-        <p class="note" style="margin:0 0 12px">사진 보관함에서 바로 고르면 iOS가 정지 사진만 넘겨줘서 라이브가 빠지고, 설정에 따라 위치도 빠질 수 있어요. 위치는 나중에 사진 정보에서 직접 넣을 수도 있어요.</p>
-      </details>
-      <div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="upGo"${go.length ? '' : ' disabled'}>업로드</button></div>` : ''}`,
+      <label class="field"><span>${t('tab.albums')}</span><select id="upAlbum"><option value="">${t('up.libraryOnly')}</option>${albums.map(([id, a]) => `<option value="${esc(id)}"${id === S.album ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+      <label class="field"><span>${t('info.tags')}</span><input id="upTags" placeholder="${t('tags.ph')}"></label>
+      <div class="row" style="padding:4px 4px 12px;border:0"><div class="grow"><b style="font-size:15px">${t('opt.keepOriginal')}</b></div><label class="switch"><input type="checkbox" id="upOrig"${prefs.keepOriginal ? ' checked' : ''}><span></span></label></div>
+      <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="upGo"${go.length ? '' : ' disabled'}>${t('up.go')}</button></div>` : ''}`,
   { kind: 'upload', onClose: () => { if (!U.running) cleanupUpload(); else updatePill(); } });
   $('#upPill').hidden = true;
   if (review) {
@@ -1716,15 +1703,22 @@ function cleanupUpload() {
   U.entries = [];
 }
 
-function setEntryStatus(e, status, failed = false) {
-  e.status = status;
-  e.failed = failed;
+/** Per-item status chip: { k: 'dup'|'err'|'processing'|'uploading'|'queued'|'saving'|'done'|'fail', text?, i?, n? } */
+function statusHTML(e) {
+  const st = e.status;
+  if (!st) return '';
+  const label = st.k === 'err' ? st.text : t('up.st.' + st.k, st);
+  return `<span class="st${st.k === 'done' ? ' done' : st.k === 'fail' ? ' fail' : ''}">${esc(label)}</span>`;
+}
+
+function setEntryStatus(e, k, extra = {}) {
+  e.status = { k, ...extra };
   const el = document.getElementById('up-' + e.main.key);
   if (el) {
     el.querySelector('.st')?.remove();
-    el.insertAdjacentHTML('beforeend', `<span class="st${status === '완료' ? ' done' : failed ? ' fail' : ''}">${esc(status)}</span>`);
+    el.insertAdjacentHTML('beforeend', statusHTML(e));
   }
-  const bar = $('#upBar'); if (bar) bar.style.width = `${(U.done + U.failed) / U.total * 100}%`;
+  const bar = $('#upBar'); if (bar) bar.style.transform = `scaleX(${(U.done + U.failed) / U.total})`;
   const cnt = $('#upCount'); if (cnt) cnt.textContent = `${U.done}/${U.total}`;
   updatePill();
 }
@@ -1733,7 +1727,7 @@ function updatePill() {
   const pill = $('#upPill');
   const sheetOpen = $('#sheet').dataset.kind === 'upload';
   pill.hidden = !U.running || sheetOpen;
-  pill.textContent = `업로드 중 ${U.done}/${U.total}`;
+  pill.textContent = `${t('up.uploading')} ${U.done}/${U.total}`;
 }
 
 async function startUpload(opts) {
@@ -1748,44 +1742,44 @@ async function startUpload(opts) {
     if (!batch.photos.length) return;
     const files = batch.files.splice(0), ps = batch.photos.splice(0), es = batch.entries.splice(0);
     batch.bytes = 0;
-    es.forEach(e => setEntryStatus(e, '저장 중'));
+    es.forEach(e => setEntryStatus(e, 'saving'));
     try {
       await serial(async () => {
-        const r = await S.gh.commit({ files, ops: [{ op: 'addPhotos', photos: ps }], message: `Moa: 사진 ${ps.length}장 추가 — @${S.me.login}`, base: S.base, title: S.index?.title });
+        const r = await S.gh.commit({ files, ops: [{ op: 'addPhotos', photos: ps }], message: `Moa: add ${ps.length} photo${ps.length === 1 ? '' : 's'} — @${S.me.login}`, base: S.base, title: S.index?.title });
         if (S.space === sp) adopt(r);
       });
       U.done += es.length;
-      es.forEach(e => setEntryStatus(e, '완료'));
+      es.forEach(e => setEntryStatus(e, 'done'));
     } catch (err) {
       console.error(err);
       U.failed += es.length;
-      es.forEach(e => setEntryStatus(e, '실패', true));
-      toast('저장 실패: ' + errMsg(err), 4000);
+      es.forEach(e => setEntryStatus(e, 'fail'));
+      toast(t('save.failedNow', { e: errMsg(err) }), 4000);
     }
   };
   for (const e of list) {
     if (S.space !== sp) break;
-    setEntryStatus(e, '처리 중');
+    setEntryStatus(e, 'processing');
     try {
       const { photo, files, bytes } = await preparePhoto(e, opts);
       batch.files.push(...files);
       batch.photos.push(photo);
       batch.entries.push(e);
       batch.bytes += bytes;
-      setEntryStatus(e, '대기');
+      setEntryStatus(e, 'queued');
       if (batch.photos.length >= 10 || batch.bytes > 50 * LIM.MB) await commitBatch();
     } catch (err) {
       console.error(e.main.name, err);
       toast(`${e.main.name}: ${errMsg(err)}`, 4000);
       U.failed++;
-      setEntryStatus(e, '실패', true);
+      setEntryStatus(e, 'fail');
     }
   }
   await commitBatch();
   U.running = false;
   wake?.release?.().catch(() => {});
   updatePill();
-  toast(U.failed ? `${U.done}개 올림 · ${U.failed}개 실패` : `${U.done}개 모두 올렸어요`, 3500);
+  toast(U.failed ? t('up.partial', { n: U.done, f: U.failed }) : t('up.allDone', { n: U.done }), 3500);
   if ($('#sheet').dataset.kind === 'upload' && !U.failed) setTimeout(() => { if (!U.running && $('#sheet').dataset.kind === 'upload') closeSheet(); }, 1200);
   else if ($('#sheet').dataset.kind !== 'upload') cleanupUpload();
   S.gh.info().then(i => { if (S.space === sp) { S.repoInfo = i; rerender(); } }).catch(() => {});
@@ -1821,7 +1815,7 @@ async function preparePhoto(e, opts) {
   const blobs = [];
   let bytes = 0;
   for (const [path, blob, k] of up) {
-    setEntryStatus(e, `올리는 중 ${blobs.length + 1}/${up.length}`);
+    setEntryStatus(e, 'uploading', { i: blobs.length + 1, n: up.length });
     const sha = await S.gh.blob(await blobToBase64(blob));
     blobs.push({ path, sha });
     sizes[k] = blob.size;
@@ -1943,7 +1937,7 @@ function bind() {
     if (b.dataset.space) { const sp = S.spaces.find(s => s.id === b.dataset.space); if (sp && sp !== S.space) openSpace(sp); return; }
     if (b.dataset.unlink) {
       const sp = S.spaces.find(s => s.id === b.dataset.unlink);
-      if (!sp || !confirm(`${sp.owner}/${sp.repo} 연결을 이 기기에서 해제할까요? (저장소와 사진은 그대로예요)`)) return;
+      if (!sp || !confirm(t('set.removeConfirm', { repo: `${sp.owner}/${sp.repo}` }))) return;
       S.spaces = S.spaces.filter(s => s !== sp);
       saveSpaces();
       localStorage.removeItem(LS.pending(sp.id));
@@ -1965,16 +1959,24 @@ function bind() {
       case 'home': return showHome();
       case 'logout': return logout();
       case 'rename': {
-        const t = prompt('앨범 이름', S.index.title || '');
-        if (t && t.trim()) edit({ op: 'setTitle', title: t.trim() });
+        const title = prompt(t('newAlbum.name'), S.index.title || '');
+        if (title && title.trim()) edit({ op: 'setTitle', title: title.trim() });
         return;
       }
       case 'clearCache':
-        clearMediaCache().then(() => { urls.clear(); resolved.clear(); toast('캐시를 비웠어요'); });
+        clearMediaCache().then(() => { urls.clear(); resolved.clear(); toast(t('set.cacheCleared')); });
         return;
     }
   });
   $('#main').addEventListener('change', e => {
+    if (e.target.matches('[data-lang]')) {
+      prefs.lang = e.target.value;
+      save(LS.prefs, prefs);
+      setLang(prefs.lang);
+      applyStaticText();
+      render();
+      return;
+    }
     const k = e.target.dataset.pref;
     if (!k) return;
     prefs[k] = e.target.checked;
@@ -1986,7 +1988,7 @@ function bind() {
     const b = e.target.closest('[data-sel]');
     if (!b) return;
     const ids = [...S.selected];
-    if (!ids.length) return toast('사진을 먼저 선택하세요');
+    if (!ids.length) return toast(t('select.none'));
     if (b.dataset.sel === 'tag') tagSheet(ids);
     else if (b.dataset.sel === 'album') pickAlbum(ids);
     else deletePhotos(ids, () => setSelecting(false));
@@ -2009,12 +2011,22 @@ function bind() {
   bindViewer();
 }
 
+/** Text baked into index.html: data-i18n (text), data-i18n-aria, data-i18n-ph. */
+function applyStaticText() {
+  $$('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  $$('[data-i18n-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.i18nAria)));
+  $$('[data-i18n-ph]').forEach(el => el.setAttribute('placeholder', t(el.dataset.i18nPh)));
+  document.title = t('app.title');
+  $('#selectBtn').textContent = t(S.selecting ? 'common.done' : 'select');
+}
+
 function registerSW() {
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 }
 
+applyStaticText();
 bind();
 boot();
 

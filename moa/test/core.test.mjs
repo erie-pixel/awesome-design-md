@@ -145,19 +145,19 @@ test('grouping: by day (with months), by place level/order, by tag', () => {
   ];
   const d = C.groupByDate(P);
   assert.deepEqual(d.map(g => g.key), ['2024-05-05', '2024-05-04', '2023-12-25', '2023-12-24']);
-  assert.equal(d[1].title, '2024년 5월 4일 토요일');
   assert.deepEqual(d[1].photos.map(p => p.id), ['2', '1']);
   assert.deepEqual(C.groupByDate(P, 'asc').map(g => g.key)[0], '2023-12-24');
 
   const city = C.groupByPlace(P);
-  assert.deepEqual(city.map(g => g.title), ['서울특별시', '서귀포시', '東京都', '위치 정보 없음']);
+  assert.deepEqual(city.map(g => g.title), ['서울특별시', '서귀포시', '東京都', '']);
+  assert.equal(city[3].none, true);
   assert.deepEqual(city[1].range, ['2024-05-04', '2024-05-04']);
   assert.ok(city[1].center.lat > 33.2 && city[1].center.lat < 33.5);
   assert.deepEqual(C.groupByPlace(P, { level: 'district', order: 'count' }).map(g => g.photos.length), [1, 1, 1, 1, 1]);
-  assert.deepEqual(C.groupByPlace(P, { level: 'country', order: 'count' }).map(g => g.title), ['대한민국', '日本', '위치 정보 없음']);
+  assert.deepEqual(C.groupByPlace(P, { level: 'country', order: 'count' }).map(g => g.title), ['대한민국', '日本', '']);
 
   const t = C.groupByTag(P);
-  assert.deepEqual(t.map(g => g.title), ['#제주', '#바다', '태그 없음']);
+  assert.deepEqual(t.map(g => g.title), ['#제주', '#바다', '']);
   assert.deepEqual(C.tagCounts(P), [['제주', 2], ['바다', 1]]);
 });
 
@@ -188,8 +188,6 @@ test('dates, tags and misc helpers', () => {
   assert.equal(C.exifDateToISO('0000:00:00 00:00:00'), null);
   assert.equal(C.normalizeTz('+0530'), '+05:30');
   assert.equal(C.normalizeTz('Z'), '+00:00');
-  assert.equal(C.fmtTime('2024-05-04T00:05:00'), '오전 12:05');
-  assert.equal(C.fmtTime('2024-05-04T13:30:00'), '오후 1:30');
   assert.equal(C.normalizeTag('  ##Summer  Trip '), 'summer trip');
   assert.equal(C.kindOf('IMG_1.HEIC'), 'photo');
   assert.equal(C.kindOf('IMG_1.MOV'), 'video');
@@ -287,4 +285,40 @@ test('waitFor: at most 6 pushes in any rolling minute', () => {
   const six = [now - 50000, now - 40000, now - 30000, now - 20000, now - 10000, now - 1000];
   assert.equal(L.waitFor(six, now), 10000);
   assert.equal(L.waitFor([now - 70000, ...six.slice(1)], now), 0);
+});
+
+// ---------------- language ----------------
+
+import * as I from '../js/i18n.js';
+import STRINGS from '../js/strings.js';
+
+test('i18n: English default, Korean switch, plurals, dates', () => {
+  I.setLang('en');
+  assert.equal(I.t('refresh.new', { n: 1 }), '1 new photo');
+  assert.equal(I.t('refresh.new', { n: 4 }), '4 new photos');
+  assert.equal(I.fmtDay('2024-05-04'), 'Saturday, May 4, 2024');
+  assert.equal(I.fmtTime('2024-05-04T13:30:00'), '1:30 PM');
+  I.setLang('ko');
+  assert.equal(I.t('refresh.new', { n: 4 }), '새 사진 4장');
+  assert.equal(I.fmtTime('2024-05-04T00:05:00'), '오전 12:05');
+  assert.equal(I.fmtTime('2024-05-04T13:30:00'), '오후 1:30');
+  assert.equal(I.t('no.such.key'), 'no.such.key');
+  I.setLang('en');
+});
+
+test('i18n: every string has both languages and matching variables', () => {
+  for (const [k, [en, ko]] of Object.entries(STRINGS)) {
+    assert.ok(en && ko, k);
+    const vars = s => [...s.matchAll(/\{(\w+)/g)].map(m => m[1]).sort().filter((v, i, a) => a.indexOf(v) === i).join();
+    assert.equal(vars(en), vars(ko), `variables differ in ${k}`);
+  }
+});
+
+test('i18n: every t() key used in the app exists', async () => {
+  const fs = await import('node:fs');
+  const src = ['app.js', 'media.js', 'github.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
+    + fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  // literal keys only (dynamic ones like t('opt.' + key) are skipped)
+  const used = new Set([...src.matchAll(/\bt\('([\w.]*\w)'(?!\s*\+)/g), ...src.matchAll(/data-i18n(?:-aria|-ph)?="([\w.]+)"/g)].map(m => m[1]));
+  for (const k of used) assert.ok(STRINGS[k], `missing string ${k}`);
 });

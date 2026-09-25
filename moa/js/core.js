@@ -45,7 +45,7 @@ export function kindOf(name, mime = '') {
 
 // ---------------- index ----------------
 
-export function emptyIndex(title = '우리 앨범') {
+export function emptyIndex(title = 'Our album') {
   return { app: 'moa', version: INDEX_VERSION, title, createdAt: new Date().toISOString(), members: {}, albums: {}, photos: {} };
 }
 
@@ -89,7 +89,7 @@ export function splitIndex(ix) {
 
 export function joinIndex(metaText, shardTexts = []) {
   const meta = JSON.parse(metaText);
-  if (!meta || meta.app !== 'moa') throw new Error('Moa 앨범 album.json이 아닙니다');
+  if (!meta || meta.app !== 'moa') throw new Error('Not a Moa album.json');
   const ix = { ...meta, members: meta.members || {}, albums: meta.albums || {}, photos: {} };
   for (const t of shardTexts) Object.assign(ix.photos, JSON.parse(t).photos || {});
   return ix;
@@ -105,7 +105,7 @@ export function mediaDir(takenAt) {
 
 export function parseIndex(text) {
   const ix = JSON.parse(text);
-  if (!ix || ix.app !== 'moa') throw new Error('Moa 앨범 index.json이 아닙니다');
+  if (!ix || ix.app !== 'moa') throw new Error('Not a Moa index.json');
   ix.members ||= {};
   ix.albums ||= {};
   ix.photos ||= {};
@@ -230,26 +230,6 @@ export function localTz(d) {
   const off = -d.getTimezoneOffset();
   const s = off >= 0 ? '+' : '-';
   return `${s}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
-}
-
-const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
-
-export function fmtDay(dayKey) {
-  const [y, m, d] = dayKey.split('-').map(Number);
-  const w = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-  return `${y}년 ${m}월 ${d}일 ${WEEK[w]}요일`;
-}
-
-export function fmtMonth(monthKey) {
-  const [y, m] = monthKey.split('-').map(Number);
-  return `${y}년 ${m}월`;
-}
-
-export function fmtTime(takenAt) {
-  const m = /T(\d{2}):(\d{2})/.exec(takenAt || '');
-  if (!m) return '';
-  const h = +m[1];
-  return `${h < 12 ? '오전' : '오후'} ${h % 12 || 12}:${m[2]}`;
 }
 
 export function fmtBytes(n) {
@@ -516,16 +496,16 @@ export function filterPhotos(list, { album, tag, kind, q } = {}) {
   });
 }
 
-/** Day groups, newest first (or oldest). Each group carries its month for section headers. */
+/** Day groups, newest first (or oldest). Each group carries its month for section headers; the UI formats titles. */
 export function groupByDate(list, order = 'desc') {
   const dir = order === 'asc' ? 1 : -1;
   const sorted = [...list].sort((a, b) => dir * (sortTs(a) - sortTs(b)));
   const groups = [];
   let cur = null;
   for (const p of sorted) {
-    const day = (p.takenAt || p.uploadedAt || '').slice(0, 10) || '날짜 없음';
+    const day = (p.takenAt || p.uploadedAt || '').slice(0, 10);
     if (!cur || cur.key !== day) {
-      cur = { key: day, month: day.slice(0, 7), title: /^\d{4}-\d{2}-\d{2}$/.test(day) ? fmtDay(day) : day, photos: [] };
+      cur = { key: day, month: day.slice(0, 7), photos: [] };
       groups.push(cur);
     }
     cur.photos.push(p);
@@ -535,7 +515,7 @@ export function groupByDate(list, order = 'desc') {
 
 export function groupByPlace(list, { level = 'city', order = 'recent' } = {}) {
   const map = new Map();
-  const none = { key: '', title: '위치 정보 없음', photos: [], none: true };
+  const none = { key: '', title: '', photos: [], none: true };
   for (const p of list) {
     const key = p.place ? placeKey(p.place, level) : '';
     if (!key) { none.photos.push(p); continue; }
@@ -561,7 +541,7 @@ export function groupByPlace(list, { level = 'city', order = 'recent' } = {}) {
 
 export function groupByTag(list) {
   const map = new Map();
-  const none = { key: '', title: '태그 없음', photos: [], none: true };
+  const none = { key: '', title: '', photos: [], none: true };
   for (const p of list) {
     const tags = p.tags || [];
     if (!tags.length) { none.photos.push(p); continue; }

@@ -180,7 +180,7 @@ try {
   await ctxA.addCookies([{ name: 'as', value: 'alice', url: APP_ORIGIN }]);
   await A.goto(APP);
   await A.waitForSelector('#loginBtn');
-  ok(!(await A.isVisible('#connectForm')), 'welcome leads with "GitHub로 시작하기"; token form tucked away');
+  ok(!(await A.isVisible('#connectForm')), 'welcome leads with "Continue with GitHub"; token form tucked away');
   if (SHOTS) { await A.waitForTimeout(600); await A.screenshot({ path: `${SHOTS}/01-welcome.png` }); }
   await A.click('#loginBtn');
   await A.waitForSelector('#newRepoBtn');
@@ -192,7 +192,7 @@ try {
   ok(/^moa-\d{8}$/.test(await A.inputValue('#nrName')), 'Korean album name gets an ASCII repository name');
   await A.fill('#nrName', 'moa-spring-trip');
   await A.click('#nrOk');
-  await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('첫 사진'));
+  await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'));
   RA = api.at('alice/moa-spring-trip');
   ok(RA.repo.private && RA.repo.topics.includes('moa-album'), 'album repository created private and tagged moa-album');
   ok(RA.paths().includes('album.json') && RA.paths().includes('README.md') && !RA.paths().includes('index.json'), 'album initialized with README.md + album.json');
@@ -201,9 +201,9 @@ try {
   await A.setInputFiles('#fileInput', files);
   await A.waitForSelector('#upGo');
   const summary = await A.textContent('.up-summary');
-  ok(/사진 5/.test(summary) && /라이브 1/.test(summary) && /위치 있음 4/.test(summary), `review sheet summary: "${summary}"`);
+  ok(/5 photos/.test(summary) && /1 Live/.test(summary) && /4 with location/.test(summary), `review sheet summary: "${summary}"`);
   ok(await A.locator('.up-item').count() === 5, 'AAE sidecar ignored, webm folded into the Live Photo');
-  ok(await A.isVisible('#upPlan .cap') && (await A.textContent('#upPlan')).includes('남은 용량'), 'upload sheet shows this upload vs remaining capacity');
+  ok(await A.isVisible('#upPlan .cap') && (await A.textContent('#upPlan')).includes('left of 10 GB'), 'upload sheet shows this upload vs remaining capacity');
   const planOn = await A.textContent('#upPlan .cap-labels');
   await A.click('#upOrig + span');
   const planOff = await A.textContent('#upPlan .cap-labels');
@@ -234,7 +234,7 @@ try {
   // date view
   await A.waitForTimeout(400);
   const months = await A.$$eval('.month', els => els.map(e => e.textContent));
-  ok(JSON.stringify(months) === JSON.stringify(['2024년 5월', '2024년 2월', '2023년 12월']), `date view months newest first: ${months}`);
+  ok(JSON.stringify(months) === JSON.stringify(['May 2024', 'February 2024', 'December 2023']), `date view months newest first: ${months}`);
   ok(await A.locator('.tile .badge').count() === 1, 'LIVE badge on exactly one tile');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/03-library-date.png` });
 
@@ -242,7 +242,7 @@ try {
   await A.click('[data-view=place]');
   await A.waitForSelector('.place-card');
   const placeTitles = await A.$$eval('.place-card h3', els => els.map(e => e.textContent));
-  ok(JSON.stringify(placeTitles) === JSON.stringify(['서울특별시', '서귀포시', '渋谷区', '위치 정보 없음']), `place view groups: ${placeTitles}`);
+  ok(JSON.stringify(placeTitles) === JSON.stringify(['서울특별시', '서귀포시', '渋谷区', 'No location']), `place view groups: ${placeTitles}`);
   await A.selectOption('[data-ctl=placeOrder]', 'count');
   ok((await A.$$eval('.place-card h3', els => els.map(e => e.textContent)))[0] === '서귀포시', 'place view sorted by photo count');
   if (SHOTS) { await A.waitForTimeout(500); await A.screenshot({ path: `${SHOTS}/04-library-place.png` }); }
@@ -294,11 +294,11 @@ try {
   await A.click('[data-act=invite]');
   await A.fill('#invUser', 'nobody-here');
   await A.click('#invSend');
-  await A.waitForFunction(() => document.querySelector('#toast').textContent.includes('그런 GitHub 아이디가 없어요'));
+  await A.waitForFunction(() => document.querySelector('#toast').textContent.includes('no such GitHub user'));
   ok(true, 'unknown GitHub username is reported');
   await A.fill('#invUser', 'bob');
   await A.click('#invSend');
-  await A.waitForSelector('#invList :text("초대 수락 대기 중")');
+  await A.waitForSelector('#invList :text("Pending")');
   ok(RA.repo.invitations.some(i => i.invitee === 'bob'), 'invitation created on GitHub for @bob');
   if (SHOTS) { await A.waitForTimeout(400); await A.screenshot({ path: `${SHOTS}/08a-invite.png` }); }
   await A.click('#scrim', { position: { x: 10, y: 10 } });
@@ -396,15 +396,22 @@ try {
   ok(true, 'Escape closes info panel, then viewer');
   await A.setInputFiles('#fileInput', [files[2]]);
   await A.waitForSelector('#upGo');
-  ok((await A.textContent('.up-summary')).includes('중복 1개'), 're-uploading the same file is flagged as duplicate');
+  ok((await A.textContent('.up-summary')).includes('1 duplicate'), 're-uploading the same file is flagged as duplicate');
   await A.click('[data-close]');
 
   // settings tab
   await A.click('[data-tab=settings]');
   await A.waitForSelector('#tab-settings .panel');
   const settingsText = await A.textContent('#tab-settings');
-  ok(settingsText.includes('@alice') && settingsText.includes('@bob') && settingsText.includes('저장 공간'), 'settings lists members and storage');
-  ok(settingsText.includes('남은') && settingsText.includes('10GB') && await A.locator('#tab-settings .dot').count() >= 5, 'storage ring + GitHub limit rows rendered');
+  ok(settingsText.includes('@alice') && settingsText.includes('@bob') && settingsText.includes('Storage'), 'settings lists members and storage');
+  ok(settingsText.includes('left') && settingsText.includes('10 GB') && await A.locator('#tab-settings .dot').count() >= 5, 'storage ring + GitHub limit rows rendered');
+  // language: English by default, Korean from Settings, remembered
+  ok((await A.textContent('[data-tab=photos]')).trim() === 'Library', 'English UI by default');
+  await A.selectOption('[data-lang]', 'ko');
+  ok((await A.textContent('[data-tab=photos]')).trim() === '보관함' && (await A.textContent('#tab-settings h1')) === '설정' && (await A.getAttribute('html', 'lang')) === 'ko', 'switching to 한국어 re-labels the app');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/09b-settings-ko.png` }); }
+  await A.selectOption('[data-lang]', 'en');
+  ok((await A.evaluate(() => JSON.parse(localStorage.getItem('moa.prefs')).lang)) === 'en' && (await A.textContent('#tab-settings h1')) === 'Settings', 'language choice is saved');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/09-settings.png`, fullPage: true });
   await A.click('[data-act=invite]');
   const link = await A.inputValue('#inviteLink');

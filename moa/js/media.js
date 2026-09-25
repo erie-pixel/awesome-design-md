@@ -7,6 +7,7 @@
    a GitHub token, so it runs no eval-based code (see vercel.json CSP).
    ============================================================ */
 
+import { t } from './i18n.js';
 import { kindOf, extOf, metaFromExif, parseQuickTime, metaFromQuickTime, pairLivePhotos, tsOf, localISO, localTz } from './core.js';
 
 export const MAX_FILE = 95 * 1024 * 1024; // GitHub enforces 100 MB per object; keep headroom for the API upload
@@ -27,8 +28,8 @@ export async function analyzeFile(file, key) {
   const mime = mimeOf(file);
   const kind = kindOf(file.name, mime);
   const item = { key, file, name: file.name, kind, mime, size: file.size, meta: {}, error: null };
-  if (!kind) { item.error = '지원하지 않는 형식'; return item; }
-  if (file.size > MAX_FILE) { item.error = '100MB 초과 (GitHub 제한)'; item.tooBig = true; return item; }
+  if (!kind) { item.error = t('media.unsupported'); return item; }
+  if (file.size > MAX_FILE) { item.error = t('media.tooBig'); item.tooBig = true; return item; }
   const buf = await file.arrayBuffer();
   item.hash = await sha256(buf);
   try {
@@ -89,8 +90,8 @@ async function decodeImage(file, mime) {
     return { src: bmp, w: bmp.width, h: bmp.height, done: () => bmp.close() };
   } catch { /* fall through */ }
   try { return await loadImg(file); } catch { /* fall through */ }
-  if (/hei[cf]/.test(mime) || /\.hei[cf]$/i.test(file.name)) throw new Error('이 브라우저는 HEIC를 열 수 없어요 — 아이폰·맥의 Safari에서 올리거나 JPEG로 바꿔 주세요');
-  throw new Error('이미지를 열 수 없어요');
+  if (/hei[cf]/.test(mime) || /\.hei[cf]$/i.test(file.name)) throw new Error(t('media.heic'));
+  throw new Error(t('media.decode'));
 }
 
 function frameOfVideo(file) {

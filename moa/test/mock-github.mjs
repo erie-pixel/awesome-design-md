@@ -15,7 +15,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
   const R = new Map();       // "owner/name" (lowercase) -> repo state
   const logins = new Set([...Object.values(users), ...extraLogins]);
   let nextInvite = 1;
-  const stats = { commits: 0, conflicts: 0, requests: 0, pushes: {} }; // pushes: user -> [ms]
+  const stats = { commits: 0, conflicts: 0, requests: 0, pushes: {} }; // pushes: "user owner/repo" -> [ms]
 
   const sha = (kind, data) => crypto.createHash('sha1').update(kind + '\0').update(data).digest('hex');
   const putBlob = buf => { const s = sha('blob', buf); blobs.set(s, buf); return s; };
@@ -47,6 +47,11 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       repo,
       head: () => repo.ref,
       fileText: path => { const t = treeAt(repo); const b = t && t.get(path); return b ? blobs.get(b).toString('utf8') : null; },
+      fileBytes: path => { const t = treeAt(repo); const b = t && t.get(path); return b ? blobs.get(b) : null; },
+      /** Commits reachable from the branch head. */
+      history() { const out = [], seen = new Set(), q = [repo.ref]; while (q.length) { const c = q.shift(); if (!c || seen.has(c)) continue; seen.add(c); out.push(c); q.push(...commits.get(c).parents); } return out; },
+      /** Is this blob still in any commit of the branch's history? */
+      reachable(blobSha) { return this.history().some(c => [...trees.get(commits.get(c).tree).values()].includes(blobSha)); },
       paths: () => [...(treeAt(repo)?.keys() || [])].sort(),
       shaOf: path => treeAt(repo)?.get(path),
       setSizeKB: kb => { repo.sizeKB = kb; },
@@ -68,10 +73,14 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
   const api = {
     stats, at,
     repos: () => [...R.values()].map(r => `${r.owner}/${r.name}`),
-    /** Most ref updates one user made inside any 60s window. */
+    /** Most ref updates one user made to one repository inside any 60s window (GitHub's guidance is per repository). */
     maxPushesPerMinute(user) {
-      const t = stats.pushes[user] || [];
-      return t.reduce((m, x) => Math.max(m, t.filter(y => y >= x && y - x < 60000).length), 0);
+      let peak = 0;
+      for (const [k, t] of Object.entries(stats.pushes)) {
+        if (!k.startsWith(user + ' ')) continue;
+        peak = t.reduce((m, x) => Math.max(m, t.filter(y => y >= x && y - x < 60000).length), peak);
+      }
+      return peak;
     },
   };
 
@@ -92,7 +101,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
-    const pushed = () => (stats.pushes[user] ||= []).push(Date.now());
+    const pushed = () => (stats.pushes[`${user} ${repo.owner}/${repo.name}`] ||= []).push(Date.now());
     let m;
 
     // ---------- account ----------

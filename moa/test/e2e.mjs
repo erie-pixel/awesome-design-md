@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createMockGitHub } from './mock-github.mjs';
 import { withExif } from './fixtures.mjs';
 import * as oauth from '../server/oauth.js';
+import * as K from '../js/crypto.js';
 
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch { ({ chromium } = await import('/opt/node22/lib/node_modules/playwright/index.mjs')); }
@@ -95,6 +96,8 @@ const readIndex = (m = RA) => {
   return { ...meta, photos };
 };
 
+/** Poll a Node-side condition (repository state) until it holds. */
+const until = async (fn, ms = 30000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error('timed out: ' + fn); await new Promise(r => setTimeout(r, 100)); } };
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) failures++; };
 const watch = (page, who) => {
@@ -380,14 +383,18 @@ try {
   await A.click('[data-v=close]');
 
   // delete removes the files from the tree
-  A.once('dialog', d => d.accept());
   const victim = ix4.photos[p1];
+  const victimSha = RA.shaOf(victim.files.original);
   await A.click(`#content .tile[data-id="${p1}"]`);
   await A.click('[data-v=info]');
   await A.click('[data-i=delete]');
+  await A.waitForSelector('#delOk');
+  ok(!(await A.isChecked('#delPurge')), 'delete sheet offers "Also erase from history", off by default');
+  await A.click('#delOk');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
   ok(!readIndex().photos[p1] && !RA.paths().includes(victim.files.thumb) && !RA.paths().includes(victim.files.original), 'delete removes entry and its files');
+  ok(RA.reachable(victimSha), 'a plain delete still leaves the photo in git history');
 
   // duplicate upload is skipped
   await A.keyboard.press('Escape'); // closes the info panel
@@ -405,6 +412,21 @@ try {
   const settingsText = await A.textContent('#tab-settings');
   ok(settingsText.includes('@alice') && settingsText.includes('@bob') && settingsText.includes('Storage'), 'settings lists members and storage');
   ok(settingsText.includes('left') && settingsText.includes('10 GB') && await A.locator('#tab-settings .dot').count() >= 5, 'storage ring + GitHub limit rows rendered');
+
+  // erase history: one root commit with today's files; the deleted photo is gone from every commit
+  const pathsBefore = RA.paths();
+  const bobHadIt = await B.evaluate(async p => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/moa-spring-trip/${p}`)), victim.files.thumb);
+  await A.click('[data-act=purge]');
+  await A.click('#purgeOk');
+  await A.waitForFunction(() => document.querySelector('#toast').textContent.includes('History erased'), null, { timeout: 20000 });
+  ok(RA.history().length === 1 && !RA.reachable(victimSha), `history erased: ${RA.history().length} commit, deleted original unreachable`);
+  ok(JSON.stringify(RA.paths()) === JSON.stringify(pathsBefore) && Object.keys(readIndex().photos).length === 4, 'the album itself is unchanged');
+  // bob's device still points at the old history; his next save lands on the new one
+  await B.evaluate(async id => { const m = window.__moa; await m.refresh(); m.S.pending.push({ op: 'tag', ids: [id], tag: '지운뒤', on: true }); await m.flush(); }, p0);
+  await B.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
+  ok(readIndex().photos[p0].tags.includes('지운뒤') && RA.history().length === 2, 'a friend on the old history saves on top of the erased one');
+  const bobStill = await B.evaluate(async p => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/moa-spring-trip/${p}`)), victim.files.thumb);
+  ok(!bobStill, `friend's device drops its cached copy of the deleted photo (had it: ${bobHadIt})`);
   // language: English by default, Korean from Settings, remembered
   ok((await A.textContent('[data-tab=photos]')).trim() === 'Library', 'English UI by default');
   await A.selectOption('[data-lang]', 'ko');
@@ -425,10 +447,124 @@ try {
   await A.click('[data-album]');
   ok((await A.textContent('#hero h1')) === '제주 3박 4일', 'album page opens');
 
-  for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute (peak ${api.maxPushesPerMinute(u)})`);
+  // ---------- an encrypted album ----------
+  const PASS = 'our secret trip 2024', PASS2 = 'a brand new passphrase';
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=home]');
+  await A.click('#newRepoBtn');
+  await A.fill('#nrTitle', '비밀 여행');
+  await A.click('#encOn + span');
+  const encName = await A.inputValue('#nrName');
+  ok(/^moa-[a-z0-9]{6}$/.test(encName), `encrypted album gets a repository name that doesn't reveal its title (${encName})`);
+  await A.fill('#encPass', 'short');
+  await A.fill('#encPass2', 'short');
+  await A.click('#nrOk');
+  ok((await A.textContent('#nrErr')).includes('8 characters'), 'too-short passphrase refused');
+  await A.fill('#encPass', PASS);
+  await A.fill('#encPass2', PASS);
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13-new-encrypted.png` }); }
+  await A.click('#nrOk');
+  await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'), null, { timeout: 20000 });
+  const RE = api.at(`alice/${encName}`);
+  const header = JSON.parse(RE.fileText('album.json'));
+  ok(K.isHeader(header) && !RE.fileText('album.json').includes('비밀') && RE.repo.description === 'Moa · encrypted' && !RE.fileText('README.md').includes('비밀'), 'album.json holds only the wrapped key; no title in description or README');
+  await A.setInputFiles('#fileInput', [files[0], files[5], files[1]]);
+  await A.waitForSelector('#upGo');
+  await A.click('#upGo');
+  await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 2, null, { timeout: 60000 });
+  const encPaths = RE.paths();
+  const stored = encPaths.filter(p => p !== 'album.json' && p !== 'README.md');
+  ok(stored.every(p => p === 'album.bin' || /^index\/s\d\d\.bin$/.test(p) || /^data\/[0-9a-f]{2}\/[0-9a-f]{30}$/.test(p)), `only opaque names in the repository (${stored.length} files)`);
+  ok(stored.every(p => RE.fileBytes(p).subarray(0, 4).toString() === 'MOA1'), 'every stored file is sealed');
+  const leaks = ['IMG_0001', '성산', 'Apple', '2024-05', 'JFIF', 'Exif', 'webm'].filter(w => stored.some(p => RE.fileBytes(p).includes(w)));
+  ok(!leaks.length, `no names, places, dates or image headers readable on GitHub${leaks.length ? ' — leaked: ' + leaks : ''}`);
+  const aKey = await K.unlockAlbumKey(header, PASS);
+  const encIndex = JSON.parse(new TextDecoder().decode(await K.open(aKey, RE.fileBytes('album.bin'))));
+  ok(encIndex.title === '비밀 여행', 'album.bin decrypts to the album meta with the passphrase');
+  await A.click('#content .tile');
+  await A.waitForFunction(() => { const i = document.querySelector('#vImg'); return i.src.startsWith('blob:') && i.naturalWidth > 0 && !i.style.filter; }, null, { timeout: 15000 });
+  ok(true, 'viewer decrypts and shows the photo');
+  await A.click('[data-v=close]');
+  ok(!(await A.evaluate(async repo => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/${repo}/.moa/index-cache.json`)), encName)), 'no plaintext offline index kept for an encrypted album');
+  await A.click('[data-tab=settings]');
+  ok((await A.textContent('#tab-settings')).includes('Encrypted'), 'settings show the album is encrypted');
+  await A.click('[data-act=invite]');
+  await A.fill('#invUser', 'bob');
+  await A.click('#invSend');
+  await A.waitForSelector('#invList :text("Pending")');
+  await A.click('#scrim', { position: { x: 10, y: 10 } });
+
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=home]');
+  await B.waitForSelector('[data-accept]');
+  await B.click('[data-accept]');
+  await B.waitForSelector('#unlockForm');
+  ok(true, 'the invited friend is asked for the album passphrase');
+  if (SHOTS) await B.screenshot({ path: `${SHOTS}/14-unlock.png` });
+  await B.fill('#unlockPass', 'not the passphrase');
+  await B.click('#unlockBtn');
+  await B.waitForSelector('#unlockErr:not([hidden])', { timeout: 15000 });
+  ok((await B.textContent('#unlockErr')).includes('Wrong passphrase'), 'wrong passphrase refused');
+  await B.fill('#unlockPass', PASS);
+  await B.click('#unlockBtn');
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 2, null, { timeout: 20000 });
+  ok((await B.textContent('#spaceName')) === '비밀 여행', 'with the passphrase the friend sees the photos and the title');
+  await B.reload();
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 2, null, { timeout: 20000 });
+  ok(!(await B.isVisible('#unlockForm')), 'the key is remembered on this device');
+
+  // delete + erase from history in one step
+  const encVictim = await A.evaluate(() => Object.values(window.__moa.S.index.photos).find(p => p.files.live));
+  const encVictimSha = RE.shaOf(encVictim.files.live);
+  await A.click('[data-tab=photos]');
+  await A.click(`#content .tile[data-id="${encVictim.id}"]`);
+  await A.click('[data-v=info]');
+  await A.click('[data-i=delete]');
+  await A.click('#delPurge + span');
+  await A.click('#delOk');
+  await until(() => !RE.paths().includes(encVictim.files.live) && RE.history().length === 1, 150000);
+  ok(!RE.reachable(encVictimSha) && RE.history().length === 1 && !RE.paths().includes(encVictim.files.live), 'delete with "erase from history" removes the photo from every commit');
+  await A.keyboard.press('Escape'); // info panel
+  await A.keyboard.press('Escape'); // viewer
+  await A.waitForSelector('#viewer', { state: 'hidden' });
+
+  // new passphrase: same key, old passphrase no longer opens album.json
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=passphrase]');
+  await A.fill('#ppOld', 'wrong old one');
+  await A.fill('#encPass', PASS2);
+  await A.fill('#encPass2', PASS2);
+  await A.click('#ppOk');
+  await A.waitForSelector('#ppErr:not([hidden])', { timeout: 15000 });
+  ok((await A.textContent('#ppErr')).includes('Wrong passphrase'), 'changing the passphrase needs the current one');
+  const headerText = RE.fileText('album.json');
+  await A.fill('#ppOld', PASS);
+  await A.click('#ppOk');
+  await until(() => RE.fileText('album.json') !== headerText && RE.history().length === 1, 150000);
+  const header2 = JSON.parse(RE.fileText('album.json'));
+  let oldWorks = true;
+  try { await K.unlockAlbumKey(header2, PASS); } catch { oldWorks = false; }
+  const k2 = await K.unlockAlbumKey(header2, PASS2);
+  ok(!oldWorks && JSON.parse(new TextDecoder().decode(await K.open(k2, RE.fileBytes('album.bin')))).title === '비밀 여행', 'new passphrase opens the album, the old one does not');
+  ok(RE.history().length === 1, 'the old wrapped key was erased from history too');
+  await B.evaluate(() => window.__moa.refresh());
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
+  ok(true, 'the friend\'s remembered key keeps working after the passphrase change');
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=lockHere]');
+  await B.waitForSelector('#unlockForm');
+  await B.reload();
+  await B.waitForSelector('#unlockForm', { timeout: 20000 });
+  ok(true, '"Lock on this device" forgets the key');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/15-settings-encrypted.png`, fullPage: true });
+
+  for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 
   // sign-out revokes the grant and forgets the token
   B.once('dialog', d => d.accept());
+  await B.fill('#unlockPass', PASS2);
+  await B.click('#unlockBtn');
+  await B.waitForSelector('#content .tile', { timeout: 20000 });
   await B.click('[data-tab=settings]');
   await B.click('[data-act=logout]');
   await B.waitForSelector('#loginBtn');

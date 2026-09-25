@@ -316,9 +316,67 @@ test('i18n: every string has both languages and matching variables', () => {
 
 test('i18n: every t() key used in the app exists', async () => {
   const fs = await import('node:fs');
-  const src = ['app.js', 'media.js', 'github.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
+  const src = ['app.js', 'media.js', 'github.js', 'crypto.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
     + fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   // literal keys only (dynamic ones like t('opt.' + key) are skipped)
   const used = new Set([...src.matchAll(/\bt\('([\w.]*\w)'(?!\s*\+)/g), ...src.matchAll(/data-i18n(?:-aria|-ph)?="([\w.]+)"/g)].map(m => m[1]));
   for (const k of used) assert.ok(STRINGS[k], `missing string ${k}`);
+});
+
+// ---------------- encryption & erase-history helpers ----------------
+import * as K from '../js/crypto.js';
+
+test('crypto: passphrase unlocks the album key; wrong passphrase and tampering are rejected', async () => {
+  const { header, key } = await K.createAlbumKey('correct horse battery', { iterations: 1000 });
+  assert.ok(K.isHeader(header) && !('app' in header), 'header has no "app" field, so older builds refuse it');
+  const sealed = await K.seal(key, new TextEncoder().encode('{"photos":{}}'));
+  assert.ok(K.isSealed(sealed));
+  assert.equal(new TextDecoder().decode(sealed.subarray(0, 4)), 'MOA1');
+  const again = await K.unlockAlbumKey(header, 'correct horse battery');
+  assert.equal(new TextDecoder().decode(await K.open(again, sealed)), '{"photos":{}}');
+  await assert.rejects(K.unlockAlbumKey(header, 'wrong horse battery'), K.BadPassphrase);
+  const bad = sealed.slice(); bad[bad.length - 1] ^= 1;
+  await assert.rejects(K.open(again, bad));
+  // same plaintext never encrypts the same way twice (fresh IV)
+  const twice = await K.seal(key, new TextEncoder().encode('{"photos":{}}'));
+  assert.notDeepEqual([...twice], [...sealed]);
+  // non-extractable: the raw key can't be read back out of the page
+  await assert.rejects(globalThis.crypto.subtle.exportKey('raw', again));
+});
+
+test('crypto: a new passphrase rewraps the same key (old files stay readable)', async () => {
+  const { header, key } = await K.createAlbumKey('first passphrase', { iterations: 1000 });
+  const file = await K.seal(key, new Uint8Array([1, 2, 3]));
+  const next = await K.rewrapAlbumKey(header, 'first passphrase', 'second passphrase');
+  assert.notEqual(next.wrapped.data, header.wrapped.data);
+  assert.equal(next.kdf.iterations, K.KDF_ITERATIONS, 'rewrap upgrades to the current work factor');
+  await assert.rejects(K.unlockAlbumKey(next, 'first passphrase'), K.BadPassphrase);
+  const k2 = await K.unlockAlbumKey(next, 'second passphrase');
+  assert.deepEqual([...await K.open(k2, file)], [1, 2, 3]);
+  await assert.rejects(K.rewrapAlbumKey(header, 'nope', 'x'), K.BadPassphrase);
+});
+
+test('sealed layout: shards bucketed by id, opaque paths, round-trips through joinIndex', () => {
+  const ix = C.emptyIndex('비밀 앨범');
+  for (let i = 0; i < 200; i++) ix.photos['p' + i] = { id: 'p' + i, takenAt: `2024-0${1 + (i % 9)}-01T00:00:00` };
+  const files = C.splitIndex(ix, { sealed: true });
+  const paths = [...files.keys()];
+  assert.equal(paths[0], C.SEALED_META);
+  assert.ok(!paths.includes(C.META_PATH), 'album.json (the key header) is never rewritten');
+  assert.ok(paths.slice(1).every(p => /^index\/s\d\d\.bin$/.test(p)), paths.join());
+  assert.ok(paths.length > 20 && paths.length <= 33, `${paths.length - 1} buckets`);
+  assert.equal(C.sealedShardOf('p7'), C.sealedShardOf('p7'));
+  const back = C.joinIndex(files.get(C.SEALED_META), paths.slice(1).map(p => files.get(p)));
+  assert.equal(Object.keys(back.photos).length, 200);
+  assert.equal(back.title, '비밀 앨범');
+  const a = C.sealedPath(), b = C.sealedPath();
+  assert.match(a, /^data\/[0-9a-f]{2}\/[0-9a-f]{30}$/);
+  assert.notEqual(a, b);
+});
+
+test('removedFiles: files of photos a newer index no longer has', () => {
+  const before = { photos: { a: { id: 'a', files: { thumb: 't/a', original: 'o/a', liveMime: 'x' } }, b: { id: 'b', files: { thumb: 't/b' } } } };
+  const after = { photos: { b: before.photos.b } };
+  assert.deepEqual(C.removedFiles(before, after).sort(), ['o/a', 't/a']);
+  assert.deepEqual(C.removedFiles(null, after), []);
 });

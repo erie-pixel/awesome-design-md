@@ -321,6 +321,9 @@ details.guide[open] summary::after { transform: rotate(45deg); }
 .home .panel { margin: 0 0 16px; }
 .album-dot { width: 34px; height: 34px; border-radius: 10px; flex: none; position: relative; }
 .album-dot::after { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--card); }
+.album-dot.locked { display: grid; place-items: center; color: #fff; }
+.album-dot.locked::after { display: none; }
+.album-dot.locked svg { width: 18px; height: 18px; }
 .row-btn .val { font-size: 20px; }
 
 /* ---------------- floating tab bar + upload button ---------------- */
@@ -353,6 +356,19 @@ details.guide[open] summary::after { transform: rotate(45deg); }
 @media (min-width: 720px) { .sheet .grab { visibility: hidden; height: 0; margin: 0; } }
 .sheet h2 { font: 700 22px/1.2 var(--font-display); letter-spacing: -.02em; margin: 8px 0 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .sheet h2 small { font: 400 14px var(--font); color: var(--muted); letter-spacing: 0; }
+.sheet-p { margin: -4px 4px 18px; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+
+/* encryption & erase-history controls */
+.opt-row { padding: 4px 4px 14px; min-height: 0; }
+.opt-row .grow b { font-size: 15px; display: flex; align-items: center; gap: 6px; }
+.opt-row .grow b svg { width: 16px; height: 16px; flex: none; }
+.lock-badge { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, #34c759 16%, transparent); color: #248a3d; }
+.lock-badge svg { width: 17px; height: 17px; }
+.lock-hero { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 20px; display: grid; place-items: center; background: var(--chip); color: var(--ink); }
+.lock-hero svg { width: 30px; height: 30px; }
+.locked-album h2 { margin-bottom: 22px; }
+.locked-album .opt-row b { color: var(--ink); }
+.locked-album .err { margin: 0 4px 12px; }
 .sheet .actions { display: flex; gap: 8px; margin-top: 18px; }
 .sheet .actions .btn { flex: 1; }
 .list-btn { display: flex; width: 100%; align-items: center; gap: 12px; padding: 13px 4px; text-align: left; border-radius: 10px; position: relative; }

@@ -7,7 +7,8 @@
    ============================================================ */
 
 import * as C from './core.js';
-import { Repo, Account, blobToBase64, clearMediaCache } from './github.js';
+import { Repo, Account, clearMediaCache, textToBase64, ENCRYPTED_DESCRIPTION } from './github.js';
+import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys } from './crypto.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
@@ -25,6 +26,7 @@ const ICON = {
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
 };
 
 // ---------------- persistence ----------------
@@ -46,6 +48,8 @@ const S = {
   filter: { kind: '', tag: '', q: '' },
   selecting: false, selected: new Set(), expanded: new Set(),
   list: [],
+  keys: new Map(), // space id → album CryptoKey, for this session
+  initPass: null,
 };
 
 const photos = () => Object.values(S.index?.photos || {});
@@ -220,7 +224,9 @@ const sameRepo = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.
 const tokenFor = sp => sp.token || S.auth?.token || '';
 const loginApi = () => (S.authApi && S.authApi !== 'https://api.github.com' ? S.authApi : null);
 const account = () => new Account(S.auth.token, S.authApi);
-const albumTitle = r => r.description?.replace(/ (—|·) Moa( 공유앨범| shared album)?$/, '') || r.name;
+const isEncryptedRepo = r => r.description === ENCRYPTED_DESCRIPTION;
+const knownTitle = r => S.spaces.find(x => !x.token && sameRepo(x, { owner: r.owner.login, repo: r.name }))?.title;
+const albumTitle = r => (isEncryptedRepo(r) ? knownTitle(r) || r.name : r.description?.replace(/ (—|·) Moa( 공유앨범| shared album)?$/, '') || r.name);
 
 /** Is "Sign in with GitHub" available? Only when the /api functions are deployed and configured. */
 async function loadAuthConfig() {
@@ -235,7 +241,8 @@ async function loadAuthConfig() {
 function spaceFromRepo(r) {
   const sp = { id: r.full_name.toLowerCase(), owner: r.owner.login, repo: r.name, branch: r.default_branch || null, api: loginApi(), title: albumTitle(r) };
   const known = S.spaces.find(x => sameRepo(x, sp) && !x.token);
-  if (known) return Object.assign(known, { branch: sp.branch || known.branch, title: sp.title });
+  // an encrypted album's title is only known once it's opened
+  if (known) return Object.assign(known, { branch: sp.branch || known.branch, title: isEncryptedRepo(r) ? known.title || sp.title : sp.title });
   S.spaces.push(sp);
   saveSpaces();
   return sp;
@@ -290,7 +297,8 @@ async function logout() {
   S.spaces = S.spaces.filter(x => x.token);
   saveSpaces();
   S.space = null; S.gh = null; S.index = null;
-  await clearMediaCache().catch(() => {});
+  S.keys.clear();
+  await Promise.all([clearMediaCache().catch(() => {}), forgetAllKeys()]);
   urls.clear(); resolved.clear();
   signedOut(t('auth.signedOut'));
 }
@@ -396,7 +404,7 @@ async function showHome({ join } = {}) {
   }
   $('#homeInvites').innerHTML = invites.length ? `<h2 class="section-title" style="margin:0 0 10px">${t('home.invites')}</h2><div class="panel">${invites.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.inviter?.avatar_url || avatar(i.inviter?.login || 'ghost'))}"><div class="grow"><b>${esc(albumTitle(i.repository))}</b><small>@${esc(i.inviter?.login || '')} · ${esc(i.repository.full_name)}</small></div><button class="btn btn-primary btn-sm" data-accept="${i.id}">${t('home.accept')}</button></div>`).join('')}</div>` : '';
   const rows = [
-    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}"></span><span class="grow"><b>${esc(albumTitle(r))}</b><small>${esc(r.full_name)}${r.private ? '' : ` · ⚠️ ${t('home.public')}`}</small></span><span class="val">›</span></button>`),
+    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot${isEncryptedRepo(r) ? ' locked' : ''}" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}">${isEncryptedRepo(r) ? ICON.lock : ''}</span><span class="grow"><b>${esc(albumTitle(r))}</b><small>${esc(r.full_name)}${isEncryptedRepo(r) ? ` · ${t('enc.on')}` : ''}${r.private ? '' : ` · ⚠️ ${t('home.public')}`}</small></span><span class="val">›</span></button>`),
     ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>${t('home.viaToken')}</small></span><span class="val">›</span></button>`),
   ];
   $('#homeAlbums').innerHTML = rows.join('') || `<div class="row"><div class="grow"><b>${t('home.empty')}</b></div></div>`;
@@ -426,29 +434,57 @@ function repoSlug(title) {
   return 'moa-' + (ascii.length >= 3 ? ascii.slice(0, 40) : `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
 }
 
+/** An encrypted album's repository name must not give its title away. */
+const opaqueSlug = () => 'moa-' + C.newId().split('-')[1];
+
+// "Encrypt" switch + passphrase fields, shared by the two album-creation forms
+function encFieldsHTML() {
+  return `<div class="row opt-row"><div class="grow"><b>${ICON.lock}${t('enc.encrypt')}</b></div><label class="switch"><input type="checkbox" id="encOn"><span></span></label></div>
+    <div id="encBox" hidden>
+      <label class="field"><span>${t('enc.pass')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
+      <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"><small>${t('enc.lost')}</small></label>
+    </div>`;
+}
+function bindEncFields(root, onToggle) {
+  const on = $('#encOn', root);
+  on.onchange = () => { $('#encBox', root).hidden = !on.checked; onToggle?.(on.checked); if (on.checked) $('#encPass', root).focus(); };
+}
+function readEncFields(root) {
+  if (!$('#encOn', root)?.checked) return { pass: null };
+  const a = $('#encPass', root).value, b = $('#encPass2', root).value;
+  if (a.length < 8) return { error: t('enc.short') };
+  if (a !== b) return { error: t('enc.mismatch') };
+  return { pass: a };
+}
+
 function newAlbumRepo() {
   const sh = openSheet(`<h2>${t('newAlbum.title')}</h2>
     <label class="field"><span>${t('newAlbum.name')}</span><input id="nrTitle" placeholder="${t('newAlbum.namePh')}" maxlength="60"></label>
     <label class="field"><span>${t('newAlbum.repo')}</span><input id="nrName" autocapitalize="off" spellcheck="false" maxlength="100"></label>
+    ${encFieldsHTML()}
     <p class="err" id="nrErr" hidden></p>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="nrOk">${t('common.create')}</button></div>`);
   const titleIn = $('#nrTitle', sh), n = $('#nrName', sh);
-  let touched = false;
+  let touched = false, sealed = false;
+  const slug = () => (sealed ? opaqueSlug() : repoSlug(titleIn.value));
   n.value = repoSlug('');
-  titleIn.oninput = () => { if (!touched) n.value = repoSlug(titleIn.value); };
+  titleIn.oninput = () => { if (!touched && !sealed) n.value = slug(); };
   n.oninput = () => { touched = true; };
+  bindEncFields(sh, on => { sealed = on; if (!touched) n.value = slug(); });
   setTimeout(() => titleIn.focus(), 50);
   $('#nrOk', sh).onclick = async () => {
     const title = titleIn.value.trim() || t('newAlbum.default');
     const name = n.value.trim();
     const err = $('#nrErr', sh);
+    const enc = readEncFields(sh);
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) { err.textContent = t('newAlbum.badName'); err.hidden = false; return; }
+    if (enc.error) { err.textContent = enc.error; err.hidden = false; return; }
     const btn = $('#nrOk', sh);
     btn.disabled = true; btn.textContent = t('common.creating');
     try {
-      const r = await account().createAlbumRepo(name, title);
+      const r = await account().createAlbumRepo(name, title, { encrypted: !!enc.pass });
       closeSheet();
-      openSpace(spaceFromRepo(r), { initTitle: title });
+      openSpace(spaceFromRepo(r), { initTitle: title, initPass: enc.pass });
     } catch (e) {
       err.textContent = e.status === 422 ? t('newAlbum.taken') : errMsg(e);
       err.hidden = false;
@@ -457,12 +493,13 @@ function newAlbumRepo() {
   };
 }
 
-async function openSpace(sp, { initTitle } = {}) {
+async function openSpace(sp, { initTitle, initPass } = {}) {
   if (!tokenFor(sp)) return S.loginAvailable ? showWelcome() : showWelcome({ join: sp });
   S.space = sp;
   save(LS.current, sp.id);
   S.gh = new Repo({ ...sp, token: tokenFor(sp) });
   S.initTitle = initTitle || null;
+  S.initPass = initPass || null;
   S.gh.onWait = s => toast(t('rate.wait', { s }), 5000);
   // GitHub recommends ≤ 6 pushes/minute per repository; the client paces itself
   S.gh.onThrottle = s => setSync('throttle', s);
@@ -479,8 +516,9 @@ async function openSpace(sp, { initTitle } = {}) {
   showTab('photos', false);
   setSync('loading');
   try {
-    const [me, info] = await Promise.all([S.gh.user(), S.gh.info()]);
+    const [me, info, key] = await Promise.all([S.gh.user(), S.gh.info(), S.keys.get(sp.id) || recallKey(sp.id)]);
     if (S.space !== sp) return;
+    if (key) { S.gh.key = key; S.keys.set(sp.id, key); }
     S.me = me;
     S.repoInfo = info;
     S.canWrite = info.permissions ? !!info.permissions.push : true;
@@ -517,25 +555,37 @@ async function refresh(first = false) {
   if (S.space !== sp) return;
   if (!head) { S.head = null; S.index = null; return renderInit(true); }
   if (head === S.head && !first) return;
-  const st = await S.gh.state(head);
+  let st;
+  try { st = await S.gh.state(head); } catch (e) {
+    if (!e.locked || S.space !== sp) throw e;
+    if (e.stale) { S.keys.delete(sp.id); S.gh.key = null; forgetKey(sp.id); }
+    return renderLocked(e.header);
+  }
   if (S.space !== sp) return;
   if (!st.index) { S.head = head; S.index = null; return renderInit(false); }
   const ix = st.index;
   const before = S.index ? Object.keys(S.index.photos).length : null;
+  const headMoved = S.head !== head;
   adopt(st);
   const after = Object.keys(S.index.photos).length;
   if (!first && before != null && after > before) toast(t('refresh.new', { n: after - before }));
-  S.gh.primeCache('.moa/index-cache.json', new Blob([JSON.stringify({ head, index: ix })], { type: 'application/json' }));
+  // an encrypted album's index stays off the device; others keep an offline copy
+  if (!S.gh.sealed) S.gh.primeCache('.moa/index-cache.json', new Blob([JSON.stringify({ head, index: ix })], { type: 'application/json' }));
+  // someone erased the history: drop cached copies of anything no longer in the album
+  if (st.root && headMoved) S.gh.pruneCache(keepSet(st)).catch(() => {});
   if (first && S.canWrite && S.me?.login && !S.index.members[S.me.login]) edit({ op: 'join', user: S.me.login, at: new Date().toISOString() });
   runGeocodeJob();
 }
 
 /** Take a fetched/committed album state { head, index, files } as the new base. */
 function adopt(st) {
+  const gone = S.base?.index ? C.removedFiles(S.base.index, st.index) : [];
+  if (gone.length) S.gh.forget(gone).catch(() => {});
   S.head = st.head;
   S.base = st;
   S.index = C.applyOps(structuredClone(st.index), S.pending);
   $('#spaceName').textContent = S.index.title || S.space.repo;
+  if (S.gh.sealed && S.index.title && S.space.title !== S.index.title) { S.space.title = S.index.title; saveSpaces(); }
   if (S.album && !S.index.albums[S.album]) S.album = null;
   rerender();
   if (!$('#viewer').hidden) refreshViewer();
@@ -575,7 +625,7 @@ function describe(ops) {
 function flush() {
   clearTimeout(flushTimer);
   return serial(async () => {
-    if (!S.pending.length || !S.gh) return;
+    if (!S.pending.length || !S.gh || (S.gh.sealed && !S.gh.key)) return; // a locked album keeps its queue until unlocked
     const sp = S.space;
     const ops = S.pending.slice();
     setSync('saving');
@@ -655,29 +705,45 @@ function renderInit(empty) {
   c.innerHTML = `<div class="empty">
     <h2>${t('init.title')}</h2>
     <p><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b></p>
-    <div style="max-width:340px;margin:0 auto"><label class="field"><span>${t('newAlbum.name')}</span><input id="initTitle" value="${esc(S.initTitle || (S.repoInfo?.description ? albumTitle(S.repoInfo) : '') || t('newAlbum.default'))}"></label>
+    <div style="max-width:340px;margin:0 auto;text-align:left" id="initForm"><label class="field"><span>${t('newAlbum.name')}</span><input id="initTitle" value="${esc(S.initTitle || (S.repoInfo?.description && !isEncryptedRepo(S.repoInfo) ? albumTitle(S.repoInfo) : '') || t('newAlbum.default'))}"></label>
+    ${S.gh.sealed ? '' : encFieldsHTML()}<p class="err" id="initErr" hidden></p>
     <button class="btn btn-primary btn-block" id="initBtn">${t('init.create')}</button></div></div>`;
-  $('#initBtn').onclick = () => serial(async () => {
-    const btn = $('#initBtn');
-    btn.disabled = true; btn.textContent = t('common.creating');
-    const title = $('#initTitle').value.trim() || t('newAlbum.default');
-    S.initTitle = null;
-    try {
-      if (empty) await S.gh.seed('README.md', repoReadme(title), 'Moa: start album');
-      const r = await S.gh.commit({ ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: create album — @${S.me.login}`, title });
-      $('#toolbar').hidden = false;
-      adopt(r);
-      toast(t('init.done'));
-    } catch (e) {
-      btn.disabled = false; btn.textContent = t('init.create');
-      toast(errMsg(e), 4000);
-    }
-  });
+  if (!S.gh.sealed) bindEncFields(c);
+  $('#initBtn').onclick = () => {
+    const enc = S.initPass ? { pass: S.initPass } : readEncFields(c);
+    if (enc.error) { $('#initErr').textContent = enc.error; $('#initErr').hidden = false; return; }
+    serial(async () => {
+      const btn = $('#initBtn');
+      btn.disabled = true; btn.textContent = t('common.creating');
+      const title = $('#initTitle').value.trim() || t('newAlbum.default');
+      S.initTitle = null; S.initPass = null;
+      try {
+        if (empty) await S.gh.seed('README.md', repoReadme(enc.pass ? null : title), 'Moa: start album');
+        const files = [];
+        if (enc.pass && !S.gh.sealed) {
+          // album.json carries only the wrapped key; everything else is sealed from the first commit on
+          const { header, key } = await createAlbumKey(enc.pass);
+          files.push({ path: C.META_PATH, sha: await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n')) });
+          S.gh.setEncryption(header, key);
+          S.keys.set(S.space.id, key);
+          rememberKey(S.space.id, key);
+        }
+        const r = await S.gh.commit({ files, ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: create album — @${S.me.login}`, title });
+        $('#toolbar').hidden = false;
+        adopt(r);
+        toast(t('init.done'));
+      } catch (e) {
+        btn.disabled = false; btn.textContent = t('init.create');
+        toast(errMsg(e), 4000);
+      }
+    });
+  };
   // an album repo we just created: no need to ask for the name twice
   if (S.initTitle) $('#initBtn').click();
 }
 
 function repoReadme(title) {
+  if (!title) return '# Moa album\n\nEncrypted. Open it in Moa with the album passphrase.\n\nManage files from the app; moving them by hand can break the album.\n';
   return `# ${title}\n\nA Moa shared album.\n\n- \`album.json\` — title, members, albums\n- \`index/YYYY-MM.json\` — photo metadata by capture month\n- \`media/YYYY/MM/DD/\` — originals (\`*.live.mov\` = Live Photo motion)\n- \`preview/\`, \`thumb/\` — JPEG renditions\n\nManage files from the app; moving them by hand can break the album.\n`;
 }
 
@@ -1006,6 +1072,10 @@ function renderSettings() {
     <div class="panel">
       <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? `⚠️ ${t('home.public')}` : t('set.private')} · ${esc(S.gh.branch)}${S.canWrite ? '' : ` · ${t('set.readonly')}`}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
       ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : ''}
+      ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
+      ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>` : ''}
+      <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
+      ${S.canWrite ? `<button class="row row-btn" data-act="purge"><span class="grow"><b style="color:var(--danger)">${t('purge.title')}</b></span><span class="val">›</span></button>` : ''}
     </div>
     <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
     <div class="panel">
@@ -1139,10 +1209,148 @@ function tagSheet(ids) {
 }
 
 function deletePhotos(ids, after) {
-  if (!confirm(t('delete.confirm', { n: ids.length }))) return false;
-  edit({ op: 'deletePhotos', ids });
-  after?.();
-  return true;
+  const sh = openSheet(`<h2>${t('delete.confirm', { n: ids.length })}</h2>
+    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="delPurge"><span></span></label></div>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="delOk">${t('common.delete')}</button></div>`);
+  $('#delOk', sh).onclick = () => {
+    const purge = $('#delPurge', sh).checked;
+    closeSheet();
+    edit({ op: 'deletePhotos', ids });
+    after?.();
+    if (purge) eraseHistory();
+  };
+}
+
+// ---------------- erase history · encryption ----------------
+
+/** Paths and index blobs the album still uses: the local cache keeps only these. */
+function keepSet(st) {
+  const keep = new Set();
+  for (const p of Object.values(st.index?.photos || {})) for (const f of C.filesOf(p)) keep.add(f);
+  for (const f of st.files?.values() || []) if (f.sha) keep.add('.blob/' + f.sha);
+  return keep;
+}
+
+async function eraseHistory() {
+  const sp = S.space;
+  await flush(); // the delete lands first
+  if (S.space !== sp) return;
+  if (S.pending.length) return toast(t('purge.failed', { e: t('purge.unsaved') }), 4000);
+  setSync('purging');
+  try {
+    await serial(async () => {
+      const head = await S.gh.purgeHistory(`Moa: erase history — @${S.me?.login || ''}`);
+      if (S.space !== sp) return;
+      const st = await S.gh.state(head);
+      if (S.space !== sp) return;
+      adopt(st);
+      await S.gh.pruneCache(keepSet(st)).catch(() => {});
+    });
+    setSync(null);
+    toast(t('purge.done'));
+  } catch (e) {
+    console.error(e);
+    setSync('error');
+    toast(t('purge.failed', { e: errMsg(e) }), 5000);
+  }
+}
+
+function purgeSheet() {
+  const sh = openSheet(`<h2>${t('purge.confirm')}</h2><p class="sheet-p">${t('purge.body')}</p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="purgeOk">${t('purge.go')}</button></div>`);
+  $('#purgeOk', sh).onclick = () => { closeSheet(); eraseHistory(); };
+}
+
+function passphraseSheet() {
+  const sh = openSheet(`<h2>${t('enc.change')}</h2>
+    <label class="field"><span>${t('enc.current')}</span><input id="ppOld" type="password" autocomplete="current-password"></label>
+    <label class="field"><span>${t('enc.new')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
+    <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"></label>
+    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="ppPurge" checked><span></span></label></div>
+    <p class="err" id="ppErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="ppOk">${t('common.save')}</button></div>`);
+  setTimeout(() => $('#ppOld', sh).focus(), 50);
+  $('#ppOk', sh).onclick = async () => {
+    const err = $('#ppErr', sh);
+    const fail = m => { err.textContent = m; err.hidden = false; };
+    const a = $('#encPass', sh).value;
+    if (a.length < 8) return fail(t('enc.short'));
+    if (a !== $('#encPass2', sh).value) return fail(t('enc.mismatch'));
+    const btn = $('#ppOk', sh);
+    btn.disabled = true; btn.textContent = t('lock.unlocking');
+    const sp = S.space;
+    try {
+      await serial(async () => {
+        const header = await rewrapAlbumKey(S.gh.header, $('#ppOld', sh).value, a);
+        const sha = await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n'));
+        const r = await S.gh.commit({ files: [{ path: C.META_PATH, sha }], message: `Moa: change passphrase — @${S.me?.login || ''}`, base: S.base, title: S.index?.title });
+        S.gh.header = header;
+        if (S.space === sp) adopt(r);
+      });
+      const purge = $('#ppPurge', sh).checked;
+      closeSheet();
+      toast(t('enc.changed'));
+      // the old wrapped key stays in history until it's erased
+      if (purge) eraseHistory();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = t('common.save');
+      fail(e instanceof BadPassphrase ? t('lock.wrong') : errMsg(e));
+    }
+  };
+}
+
+function lockHere() {
+  const sp = S.space;
+  S.keys.delete(sp.id);
+  forgetKey(sp.id);
+  S.gh.key = null;
+  for (const k of [...resolved.keys()]) if (k.startsWith(sp.id + ':')) { URL.revokeObjectURL(resolved.get(k)); resolved.delete(k); urls.delete(k); }
+  renderLocked(S.gh.header);
+}
+
+function renderLocked(header) {
+  Object.assign(S, { index: null, head: null, base: null });
+  showTab('photos', false);
+  $('#hero').innerHTML = '';
+  $('#toolbar').hidden = true;
+  $('#uploadBtn').hidden = true;
+  $('#uploadFab').hidden = true;
+  $('#selectBtn').hidden = true;
+  setSync(null);
+  const c = $('#content');
+  c.innerHTML = `<div class="empty locked-album"><div class="lock-hero">${ICON.lock}</div>
+    <h2>${t('lock.title')}</h2>
+    <form id="unlockForm" autocomplete="off" style="max-width:340px;margin:0 auto;text-align:left">
+      <label class="field"><span>${t('lock.pass')}</span><input id="unlockPass" type="password" autocomplete="current-password" required></label>
+      <div class="row opt-row"><div class="grow"><b>${t('lock.remember')}</b></div><label class="switch"><input type="checkbox" id="unlockRemember" checked><span></span></label></div>
+      <p class="err" id="unlockErr" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit" id="unlockBtn">${t('lock.unlock')}</button>
+    </form></div>`;
+  const sp = S.space;
+  setTimeout(() => $('#unlockPass')?.focus(), 50);
+  $('#unlockForm').onsubmit = async e => {
+    e.preventDefault();
+    const btn = $('#unlockBtn'), err = $('#unlockErr');
+    err.hidden = true;
+    btn.disabled = true; btn.textContent = t('lock.unlocking');
+    try {
+      const key = await unlockAlbumKey(header, $('#unlockPass').value);
+      if (S.space !== sp) return;
+      S.gh.key = key;
+      S.keys.set(sp.id, key);
+      if ($('#unlockRemember').checked) rememberKey(sp.id, key);
+      await serial(() => refresh(true));
+      if (S.space !== sp) return;
+      setSync(S.pending.length ? 'pending' : null);
+      if (S.pending.length) scheduleFlush(500);
+    } catch (ex) {
+      if (!$('#unlockBtn')) return;
+      btn.disabled = false; btn.textContent = t('lock.unlock');
+      err.textContent = ex instanceof BadPassphrase ? t('lock.wrong') : errMsg(ex);
+      err.hidden = false;
+      $('#unlockPass').select();
+    }
+  };
 }
 
 // ============================================================
@@ -1806,21 +2014,22 @@ async function preparePhoto(e, opts) {
   try { r = await makeRenditions(m); } catch (err) { if (m.kind === 'photo') throw err; }
   const ext = C.extOf(m.name) || (m.kind === 'video' ? 'mp4' : 'jpg');
   const files = {}, up = [], sizes = {};
-  if (m.kind === 'video' || opts.keepOriginal) { files.original = `media/${ym}/${id}.${ext}`; up.push([files.original, m.file, 'original']); }
-  if (r) { files.preview = `preview/${ym}/${id}.jpg`; up.push([files.preview, r.preview, 'preview']); }
-  files.thumb = `thumb/${ym}/${id}.jpg`;
+  // encrypted album: random names, so paths give away no dates or file types
+  const at = path => (S.gh.sealed ? C.sealedPath() : path);
+  if (m.kind === 'video' || opts.keepOriginal) { files.original = at(`media/${ym}/${id}.${ext}`); up.push([files.original, m.file, 'original']); }
+  if (r) { files.preview = at(`preview/${ym}/${id}.jpg`); up.push([files.preview, r.preview, 'preview']); }
+  files.thumb = at(`thumb/${ym}/${id}.jpg`);
   up.push([files.thumb, r?.thumb || await placeholderThumb(), 'thumb']);
-  if (e.live) { files.live = `media/${ym}/${id}.live.${C.extOf(e.live.name) || 'mov'}`; up.push([files.live, e.live.file, 'live']); }
+  if (e.live) { files.live = at(`media/${ym}/${id}.live.${C.extOf(e.live.name) || 'mov'}`); up.push([files.live, e.live.file, 'live']); }
 
   const blobs = [];
   let bytes = 0;
   for (const [path, blob, k] of up) {
     setEntryStatus(e, 'uploading', { i: blobs.length + 1, n: up.length });
-    const sha = await S.gh.blob(await blobToBase64(blob));
+    const sha = await S.gh.putMedia(path, blob, { prime: k === 'thumb' || k === 'preview' });
     blobs.push({ path, sha });
     sizes[k] = blob.size;
     bytes += blob.size;
-    if (k === 'thumb' || k === 'preview') S.gh.primeCache(path, blob);
   }
   const lq = e.live?.meta || {};
   const photo = clean({
@@ -1941,6 +2150,8 @@ function bind() {
       S.spaces = S.spaces.filter(s => s !== sp);
       saveSpaces();
       localStorage.removeItem(LS.pending(sp.id));
+      S.keys.delete(sp.id);
+      forgetKey(sp.id);
       if (sp === S.space) { S.space = null; S.gh = null; S.index = null; S.spaces[0] ? openSpace(S.spaces[0]) : showWelcome(); }
       else render();
       return;
@@ -1954,6 +2165,9 @@ function bind() {
       case 'expand': { const k = b.dataset.key; S.expanded.has(k) ? S.expanded.delete(k) : S.expanded.add(k); return renderPhotos(); }
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
+      case 'purge': return purgeSheet();
+      case 'passphrase': return passphraseSheet();
+      case 'lockHere': return lockHere();
       case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
       case 'home': return showHome();

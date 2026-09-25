@@ -10,11 +10,15 @@
    touched index shards) lands as a single commit; a non-fast-forward
    ref update means a friend committed first, so we re-read and replay.
    Ref updates are paced to GitHub's 6-pushes-per-minute guidance.
+   Encrypted albums (see crypto.js): album.json holds only the wrapped
+   key; album.bin, index/sNN.bin and data/xx/<random> are sealed, so the
+   repository shows no names, dates, places or pixels.
    ============================================================ */
 
-import { INDEX_PATH, META_PATH, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf } from './core.js';
+import { INDEX_PATH, META_PATH, SEALED_META, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf } from './core.js';
 import { waitFor } from './limits.js';
 import { t } from './i18n.js';
+import { isHeader, isSealed, seal, sealParts, open } from './crypto.js';
 
 const MEDIA_CACHE = 'moa-media-v1';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -47,6 +51,17 @@ export function blobToBase64(blob) {
 }
 
 const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+const utf8 = new TextDecoder();
+
+/** An encrypted album without (or with the wrong) key on this device. */
+export class LockedError extends Error {
+  constructor(header, stale = false) {
+    super(t('lock.title'));
+    this.locked = true;
+    this.header = header;
+    this.stale = stale;
+  }
+}
 
 export class Repo {
   constructor({ owner, repo, token, branch, api }) {
@@ -60,7 +75,12 @@ export class Repo {
     this.pushTimes = [];
     this._inflight = 0;
     this._queue = [];
+    this.header = null;     // wrapped-key header when the album is encrypted
+    this.key = null;        // album CryptoKey once unlocked
   }
+
+  get sealed() { return !!this.header; }
+  setEncryption(header, key) { this.header = header; this.key = key; }
 
   get base() { return `${this.api}/repos/${this.owner}/${this.repo}`; }
   get webUrl() { return this.api === 'https://api.github.com' ? `https://github.com/${this.owner}/${this.repo}` : null; }
@@ -141,20 +161,30 @@ export class Repo {
     return this.req('GET', `/contents/${encPath(path)}?ref=${encodeURIComponent(ref)}`, { accept: 'application/vnd.github.raw+json', as, allow404: true });
   }
 
-  /** Blob text by sha. Blobs are content-addressed, so the cache never goes stale. */
-  async blobText(sha) {
-    const key = `https://moa.cache/blob/${sha}`;
+  /** Blob bytes by sha. Blobs are content-addressed, so the cache never goes stale. */
+  async blobBytes(sha) {
+    const key = this.cacheKey(`.blob/${sha}`);
     let c = null;
     if ('caches' in globalThis) {
       try {
         c = await caches.open(MEDIA_CACHE);
         const hit = await c.match(key);
-        if (hit) return hit.text();
+        if (hit) return new Uint8Array(await hit.arrayBuffer());
       } catch { c = null; }
     }
-    const text = await this.req('GET', `/git/blobs/${sha}`, { accept: 'application/vnd.github.raw+json', as: 'text', cache: 'force-cache' });
-    if (c) c.put(key, new Response(text)).catch(() => {});
-    return text;
+    const b = await this.req('GET', `/git/blobs/${sha}`, { accept: 'application/vnd.github.raw+json', as: 'blob', cache: 'force-cache' });
+    const u8 = new Uint8Array(await b.arrayBuffer());
+    if (c) c.put(key, new Response(u8)).catch(() => {});
+    return u8;
+  }
+
+  async blobText(sha) { return utf8.decode(await this.blobBytes(sha)); }
+
+  /** Text of a sealed index file. A key that can't open it is treated as no key. */
+  async sealedText(sha) {
+    const u8 = await this.blobBytes(sha);
+    if (!isSealed(u8)) throw new Error('unencrypted file in an encrypted album');
+    try { return utf8.decode(await open(this.key, u8)); } catch { throw new LockedError(this.header, true); }
   }
 
   /**
@@ -163,27 +193,42 @@ export class Repo {
    * Unchanged shards come from cache, so a refresh costs ~3 requests.
    */
   async state(head) {
-    const tree = await this.treeOf(head);
-    const root = (await this.req('GET', `/git/trees/${tree}`)).tree;
+    const commit = await this.req('GET', `/git/commits/${head}`);
+    const rootCommit = !commit.parents?.length; // history was erased (or never had more than one commit)
+    const root = (await this.req('GET', `/git/trees/${commit.tree.sha}`)).tree;
     const find = n => root.find(e => e.path === n);
     const meta = find(META_PATH), legacy = find(INDEX_PATH), dir = find(SHARD_DIR);
     const files = new Map();
+    const shardList = async ext => (dir?.type === 'tree'
+      ? (await this.req('GET', `/git/trees/${dir.sha}`)).tree.filter(e => e.type === 'blob' && e.path.endsWith(ext)).map(e => ({ ...e, path: `${SHARD_DIR}/${e.path}` }))
+      : []);
     if (meta) {
-      const shards = dir?.type === 'tree'
-        ? (await this.req('GET', `/git/trees/${dir.sha}`)).tree.filter(e => e.type === 'blob' && e.path.endsWith('.json')).map(e => ({ ...e, path: `${SHARD_DIR}/${e.path}` }))
-        : [];
-      const all = [{ ...meta, path: META_PATH }, ...shards];
-      const texts = await Promise.all(all.map(f => this.blobText(f.sha)));
-      all.forEach((f, i) => files.set(f.path, { sha: f.sha, size: f.size ?? texts[i].length, text: texts[i] }));
+      const metaText = await this.blobText(meta.sha);
+      let doc = null;
+      try { doc = JSON.parse(metaText); } catch { /* joinIndex reports it */ }
+      if (isHeader(doc)) {
+        this.header = doc;
+        if (!this.key) throw new LockedError(doc);
+        const body = find(SEALED_META);
+        if (!body) return { head, index: null, files, root: rootCommit };
+        const all = [{ ...body, path: SEALED_META }, ...await shardList('.bin')];
+        const texts = await Promise.all(all.map(f => this.sealedText(f.sha)));
+        all.forEach((f, i) => files.set(f.path, { sha: f.sha, size: f.size, text: texts[i] }));
+        return { head, index: joinIndex(texts[0], texts.slice(1)), files, root: rootCommit };
+      }
+      this.header = null;
+      const shards = await shardList('.json');
+      const texts = [metaText, ...await Promise.all(shards.map(f => this.blobText(f.sha)))];
+      [{ ...meta, path: META_PATH }, ...shards].forEach((f, i) => files.set(f.path, { sha: f.sha, size: f.size ?? texts[i].length, text: texts[i] }));
       if (legacy) files.set(INDEX_PATH, { sha: legacy.sha, size: legacy.size, text: null }); // removed on next commit
-      return { head, index: joinIndex(texts[0], texts.slice(1)), files };
+      return { head, index: joinIndex(texts[0], texts.slice(1)), files, root: rootCommit };
     }
     if (legacy) {
       const text = await this.blobText(legacy.sha);
       files.set(INDEX_PATH, { sha: legacy.sha, size: legacy.size ?? text.length, text });
-      return { head, index: parseIndex(text), files };
+      return { head, index: parseIndex(text), files, root: rootCommit };
     }
-    return { head, index: null, files };
+    return { head, index: null, files, root: rootCommit };
   }
 
   /** Wait until another ref update fits in GitHub's recommended push rate. */
@@ -202,6 +247,20 @@ export class Repo {
 
   async blob(base64) {
     return (await this.req('POST', '/git/blobs', { body: { content: base64, encoding: 'base64' } })).sha;
+  }
+
+  /** Blob for an index file: sealed in an encrypted album. */
+  async putText(text) {
+    const bytes = new TextEncoder().encode(text);
+    return this.blob(bytesToBase64(this.sealed ? await seal(this.key, bytes) : bytes));
+  }
+
+  /** Blob for a photo/video file; prime = keep a copy in the local cache (as stored). */
+  async putMedia(path, blob, { prime = false } = {}) {
+    const body = this.sealed ? new Blob(await sealParts(this.key, new Uint8Array(await blob.arrayBuffer()))) : blob;
+    const sha = await this.blob(await blobToBase64(body));
+    if (prime) this.primeCache(path, body);
+    return sha;
   }
 
   /** First commit into an empty repository (Git Data API refuses empty repos). */
@@ -228,11 +287,11 @@ export class Repo {
       const deletes = [];
       for (const op of ops) if (op.op === 'deletePhotos') for (const id of op.ids) if (ix.photos[id]) deletes.push(...filesOf(ix.photos[id]));
       applyOps(ix, ops);
-      const next = splitIndex(ix);
+      const next = splitIndex(ix, { sealed: this.sealed });
       const changed = [...next].filter(([path, text]) => st.files.get(path)?.text !== text);
-      const shas = await Promise.all(changed.map(([, text]) => this.blob(textToBase64(text))));
+      const shas = await Promise.all(changed.map(([, text]) => this.putText(text)));
       const nextFiles = new Map();
-      for (const [path, text] of next) nextFiles.set(path, { ...st.files.get(path), text, size: new TextEncoder().encode(text).length });
+      for (const [path, text] of next) nextFiles.set(path, { ...st.files.get(path), text, size: new TextEncoder().encode(text).length + (this.sealed ? 32 : 0) });
       changed.forEach(([path], i) => { nextFiles.get(path).sha = shas[i]; });
       const removed = [...st.files.keys()].filter(path => !next.has(path));
       const entries = [
@@ -245,7 +304,7 @@ export class Repo {
       await this.gate();
       try {
         await this.req('PATCH', `/git/refs/heads/${encodeURIComponent(this.branch)}`, { body: { sha: c.sha, force: false } });
-        return { head: c.sha, index: ix, files: nextFiles };
+        return { head: c.sha, index: ix, files: nextFiles, root: false };
       } catch (e) {
         if (e.status !== 422 && e.status !== 409) throw e;
         await sleep(300 + Math.random() * 700 * (attempt + 1)); // someone else committed first
@@ -254,12 +313,38 @@ export class Repo {
     throw new GitHubError(409, t('gh.conflict'));
   }
 
+  /**
+   * Erase history: the branch becomes one commit holding today's files,
+   * so photos deleted earlier are reachable from no commit and GitHub
+   * garbage-collects them. Rewrites the branch (force update), so it
+   * starts over if a friend saves in the meantime.
+   */
+  async purgeHistory(message) {
+    const ref = `/git/refs/heads/${encodeURIComponent(this.branch)}`;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const head = await this.head();
+      if (!head) throw new GitHubError(409, 'empty', { empty: true });
+      const c = await this.req('POST', '/git/commits', { body: { message, tree: await this.treeOf(head), parents: [] } });
+      await this.gate();
+      if (await this.head() !== head) { await sleep(400 + Math.random() * 600); continue; }
+      await this.req('PATCH', ref, { body: { sha: c.sha, force: true } });
+      return c.sha;
+    }
+    throw new GitHubError(409, t('gh.conflict'));
+  }
+
   // ---------- media with local cache ----------
 
   cacheKey(path) { return `https://moa.cache/${this.owner}/${this.repo}/${path}`; }
 
-  /** Files are immutable (unique ids) so cache forever. Limited parallelism. */
+  /** Files are immutable (unique ids) so cache forever — as stored, i.e. still encrypted. Limited parallelism. */
   async media(path, { cache = true } = {}) {
+    const stored = await this.storedMedia(path, cache);
+    if (!this.sealed) return stored;
+    try { return new Blob([await open(this.key, new Uint8Array(await stored.arrayBuffer()))]); } catch { throw new LockedError(this.header, true); }
+  }
+
+  async storedMedia(path, cache) {
     let c = null;
     if (cache && 'caches' in globalThis) {
       try {
@@ -286,6 +371,25 @@ export class Repo {
     try { await (await caches.open(MEDIA_CACHE)).put(this.cacheKey(path), new Response(blob)); } catch { /* quota */ }
   }
 
+  /** Drop cached copies of these paths (photos a friend deleted). */
+  async forget(paths) {
+    if (!('caches' in globalThis) || !paths.length) return;
+    const c = await caches.open(MEDIA_CACHE);
+    await Promise.all(paths.map(p => c.delete(this.cacheKey(p))));
+  }
+
+  /** Keep only this album's cached files named in `keep` (paths and ".blob/<sha>"). */
+  async pruneCache(keep) {
+    if (!('caches' in globalThis)) return;
+    const c = await caches.open(MEDIA_CACHE);
+    const prefix = this.cacheKey('');
+    for (const req of await c.keys()) {
+      if (!req.url.startsWith(prefix)) continue;
+      const path = decodeURIComponent(req.url.slice(prefix.length));
+      if (path !== '.moa/index-cache.json' && !keep.has(path)) await c.delete(req);
+    }
+  }
+
   // ---------- sharing ----------
 
   /** Invite a GitHub user with write access. Returns the invitation, or null if already a collaborator. */
@@ -296,6 +400,7 @@ export class Repo {
 }
 
 export const ALBUM_TOPIC = 'moa-album';
+export const ENCRYPTED_DESCRIPTION = 'Moa · encrypted'; // the title stays inside the album
 
 /** Account-level calls for a signed-in user (no particular repository). */
 export class Account {
@@ -313,8 +418,9 @@ export class Account {
   }
 
   /** A new private repository for an album, tagged so it can be found again. */
-  async createAlbumRepo(name, title) {
-    const r = await this.req('POST', '/user/repos', { body: { name, description: `${title} · Moa`, private: true, has_issues: false, has_projects: false, has_wiki: false } });
+  async createAlbumRepo(name, title, { encrypted = false } = {}) {
+    const description = encrypted ? ENCRYPTED_DESCRIPTION : `${title} · Moa`;
+    const r = await this.req('POST', '/user/repos', { body: { name, description, private: true, has_issues: false, has_projects: false, has_wiki: false } });
     await this.req('PUT', `/repos/${r.owner.login}/${r.name}/topics`, { body: { names: [ALBUM_TOPIC] } }).catch(() => {});
     return r;
   }

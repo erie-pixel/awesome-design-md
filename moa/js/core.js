@@ -8,6 +8,8 @@
 export const INDEX_PATH = 'index.json';   // v1: everything in one file (read + migrated)
 export const META_PATH = 'album.json';    // v2: title, members, albums
 export const SHARD_DIR = 'index';         // v2: index/YYYY-MM.json, photos by capture month
+export const SEALED_META = 'album.bin';   // encrypted album: sealed album.json body (album.json holds the wrapped key)
+const SEALED_SHARDS = 32;                 // encrypted album: index/sNN.bin, bucketed by photo id so names reveal no dates
 export const INDEX_VERSION = 2;
 
 // ---------------- ids & small helpers ----------------
@@ -74,12 +76,28 @@ export function shardOf(p) {
   return `${SHARD_DIR}/${m ? `${m[1]}-${m[2]}` : 'undated'}.json`;
 }
 
-export function splitIndex(ix) {
+/** Shard for a photo in an encrypted album: a stable bucket of its id (FNV-1a). */
+export function sealedShardOf(id) {
+  let h = 0x811c9dc5;
+  for (const c of String(id)) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193); }
+  return `${SHARD_DIR}/s${String((h >>> 0) % SEALED_SHARDS).padStart(2, '0')}.bin`;
+}
+
+/** Opaque path for an encrypted file: data/ab/<30 hex>. 256 folders keep each far below 3,000 entries. */
+export function sealedPath() {
+  const r = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(r);
+  const hex = [...r].map(b => b.toString(16).padStart(2, '0')).join('');
+  return `data/${hex.slice(0, 2)}/${hex.slice(2)}`;
+}
+
+/** path → text for every index file. sealed: album.bin + index/sNN.bin (the caller encrypts them). */
+export function splitIndex(ix, { sealed = false } = {}) {
   const { photos = {}, ...meta } = ix;
-  const files = new Map([[META_PATH, JSON.stringify({ ...meta, version: INDEX_VERSION }, null, 2) + '\n']]);
+  const files = new Map([[sealed ? SEALED_META : META_PATH, JSON.stringify({ ...meta, version: INDEX_VERSION }, null, 2) + '\n']]);
   const shards = new Map();
   for (const [id, p] of Object.entries(photos)) {
-    const k = shardOf(p);
+    const k = sealed ? sealedShardOf(id) : shardOf(p);
     if (!shards.has(k)) shards.set(k, {});
     shards.get(k)[id] = p;
   }
@@ -195,6 +213,12 @@ export function applyOps(ix, ops) { for (const op of ops) applyOp(ix, op); retur
 /** Repository paths a delete op should remove. */
 export function filesOf(p) {
   return Object.entries(p.files || {}).filter(([k, v]) => v && !k.endsWith('Mime')).map(([, v]) => v).filter((v, i, a) => a.indexOf(v) === i);
+}
+
+/** Files of photos that were in `before` and are gone from `after`. */
+export function removedFiles(before, after) {
+  const keep = after?.photos || {};
+  return Object.values(before?.photos || {}).filter(p => !keep[p.id]).flatMap(filesOf);
 }
 
 // ---------------- dates ----------------

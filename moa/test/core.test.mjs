@@ -199,3 +199,92 @@ test('dates, tags and misc helpers', () => {
   const cl = C.clusterPoints([{ gps: { lat: 0.001, lng: 0 } }, { gps: { lat: 0.0011, lng: 0 } }, { gps: { lat: 10, lng: 10 } }, {}], g => ({ x: g.lng * 1000, y: g.lat * 1000 }), 64);
   assert.equal(cl.length, 2);
 });
+
+// ---------------- v2 index shards ----------------
+
+test('splitIndex/joinIndex: monthly shards round-trip, meta stays small', () => {
+  const ix = C.emptyIndex('봄');
+  ix.members.alice = { joinedAt: 'x' };
+  ix.albums.a1 = { id: 'a1', name: 'Trip' };
+  ix.photos = {
+    p1: { id: 'p1', takenAt: '2024-05-04T06:12:09' },
+    p2: { id: 'p2', takenAt: '2024-05-30T23:59:59' },
+    p3: { id: 'p3', takenAt: '2023-12-24T21:30:12' },
+    p4: { id: 'p4', uploadedAt: '2026-09-25T00:00:00Z' },
+    p5: { id: 'p5' },
+  };
+  const files = C.splitIndex(ix);
+  assert.deepEqual([...files.keys()], ['album.json', 'index/2023-12.json', 'index/2024-05.json', 'index/2026-09.json', 'index/undated.json']);
+  assert.equal(JSON.parse(files.get('album.json')).photos, undefined);
+  assert.equal(JSON.parse(files.get('album.json')).version, 2);
+  const back = C.joinIndex(files.get('album.json'), [...files.entries()].filter(([k]) => k !== 'album.json').map(([, v]) => v));
+  assert.deepEqual(back.photos, ix.photos);
+  assert.deepEqual(back.albums, ix.albums);
+  assert.throws(() => C.joinIndex('{"app":"other"}'));
+  // moving a photo to another month moves it between shards
+  ix.photos.p1.takenAt = '2023-12-01T00:00:00';
+  assert.ok(C.splitIndex(ix).get('index/2023-12.json').includes('"p1"'));
+});
+
+test('mediaDir: day folders', () => {
+  assert.equal(C.mediaDir('2024-05-04T06:12:09'), '2024/05/04');
+  assert.match(C.mediaDir(null), /^\d{4}\/\d{2}\/\d{2}$/);
+});
+
+// ---------------- GitHub repository limits ----------------
+
+import * as L from '../js/limits.js';
+
+test('usage: larger of GitHub-reported size and index sum, against 10 GB', () => {
+  const photos = [{ sizes: { original: 3 * L.MB, preview: 0.5 * L.MB, thumb: 0.05 * L.MB, live: 2 * L.MB } }];
+  const u = L.usage({ repoKB: 0, photos });
+  assert.equal(u.used, 5.55 * L.MB);
+  assert.equal(u.breakdown.live, 2 * L.MB);
+  assert.equal(u.limit, 10 * L.GB);
+  assert.equal(u.level, 'ok');
+  const full = L.usage({ repoKB: 9.7 * 1024 * 1024, photos });
+  assert.equal(full.used, 9.7 * L.GB);
+  assert.equal(full.level, 'danger');
+  assert.equal(L.usage({ repoKB: 8.5 * 1024 * 1024 }).level, 'warn');
+  assert.equal(L.usage({ repoKB: 11 * 1024 * 1024 }).level, 'over');
+  assert.equal(L.usage({ repoKB: 11 * 1024 * 1024 }).remaining, 0);
+});
+
+test('planUpload: estimate, originals toggle, 50 MB / 100 MB flags', () => {
+  const E = [
+    { main: { kind: 'photo', size: 3 * L.MB }, live: { size: 2 * L.MB } },
+    { main: { kind: 'video', size: 60 * L.MB } },
+    { main: { kind: 'photo', size: 0.5 * L.MB } },
+    { main: { kind: 'photo', size: 200 * L.MB }, skip: true },
+  ];
+  const on = L.planUpload(E, { keepOriginal: true, usage: { used: 0 } });
+  const off = L.planUpload(E, { keepOriginal: false, usage: { used: 0 } });
+  assert.ok(on.bytes > off.bytes);
+  assert.equal(on.bytes - off.bytes, 3.5 * L.MB, 'only photo originals drop; video always kept');
+  assert.equal(on.heavy.length, 1);
+  assert.equal(on.overRecommended.length, 2);
+  assert.equal(off.overRecommended.length, 1);
+  const near = L.planUpload(E, { keepOriginal: true, usage: { used: 10 * L.GB - 10 * L.MB } });
+  assert.equal(near.level, 'over');
+  assert.equal(near.remainingAfter, 0);
+});
+
+test('dirCounts / busiestDir / largestFile', () => {
+  const photos = [
+    { name: 'a', files: { original: 'media/2024/05/04/a.heic', live: 'media/2024/05/04/a.live.mov', thumb: 'thumb/2024/05/04/a.jpg' }, sizes: { original: 9, live: 4 } },
+    { name: 'b', files: { original: 'media/2024/05/04/b.heic', thumb: 'thumb/2024/05/05/b.jpg' }, sizes: { original: 12 } },
+  ];
+  const b = L.busiestDir(L.dirCounts(photos));
+  assert.deepEqual([b.dir, b.count, b.level], ['media/2024/05/04', 3, 'ok']);
+  assert.equal(L.busiestDir(new Map([['x', 2900]])).level, 'danger');
+  assert.deepEqual(L.largestFile(photos), { name: 'b', size: 12 });
+});
+
+test('waitFor: at most 6 pushes in any rolling minute', () => {
+  const now = 100000;
+  assert.equal(L.waitFor([], now), 0);
+  assert.equal(L.waitFor([now - 1000, now - 2000, now - 3000, now - 4000, now - 5000], now), 0);
+  const six = [now - 50000, now - 40000, now - 30000, now - 20000, now - 10000, now - 1000];
+  assert.equal(L.waitFor(six, now), 10000);
+  assert.equal(L.waitFor([now - 70000, ...six.slice(1)], now), 0);
+});

@@ -34,6 +34,14 @@ const appServer = http.createServer((req, res) => {
 });
 await new Promise(r => appServer.listen(APP_PORT, r));
 
+// the album as the repository holds it: album.json + index/*.json shards
+const readIndex = (m = api) => {
+  const meta = JSON.parse(m.fileText('album.json'));
+  const photos = {};
+  for (const p of m.paths().filter(p => p.startsWith('index/'))) Object.assign(photos, JSON.parse(m.fileText(p)).photos);
+  return { ...meta, photos };
+};
+
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) failures++; };
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
@@ -121,32 +129,40 @@ try {
   await A.fill('#initTitle', '우리들의 봄 여행');
   await A.click('#initBtn');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('첫 사진'));
-  ok(api.paths().includes('index.json') && api.paths().includes('README.md'), 'album initialized with README.md + index.json');
-  ok(JSON.parse(api.fileText('index.json')).members.alice, 'alice recorded as member');
+  ok(api.paths().includes('album.json') && api.paths().includes('README.md') && !api.paths().includes('index.json'), 'album initialized with README.md + album.json');
+  ok(readIndex().members.alice, 'alice recorded as member');
 
   await A.setInputFiles('#fileInput', files);
   await A.waitForSelector('#upGo');
   const summary = await A.textContent('.up-summary');
   ok(/사진 5/.test(summary) && /라이브 1/.test(summary) && /위치 있음 4/.test(summary), `review sheet summary: "${summary}"`);
   ok(await A.locator('.up-item').count() === 5, 'AAE sidecar ignored, webm folded into the Live Photo');
+  ok(await A.isVisible('#upPlan .cap') && (await A.textContent('#upPlan')).includes('남은 용량'), 'upload sheet shows this upload vs remaining capacity');
+  const planOn = await A.textContent('#upPlan .cap-labels');
+  await A.click('#upOrig + span');
+  const planOff = await A.textContent('#upPlan .cap-labels');
+  ok(planOn !== planOff, `turning originals off recomputes the estimate (${planOn.trim()} → ${planOff.trim()})`);
+  await A.click('#upOrig + span');
   await A.fill('#upTags', '봄여행');
   if (SHOTS) { await A.waitForTimeout(500); await A.screenshot({ path: `${SHOTS}/02-upload-review.png` }); }
   await A.click('#upGo');
   await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 5, null, { timeout: 60000 });
   ok(true, '5 tiles in the library after upload');
-  const ix1 = JSON.parse(api.fileText('index.json'));
+  const ix1 = readIndex();
   const live = Object.values(ix1.photos).find(p => p.name === 'IMG_0001.JPG');
   ok(live && live.files.live && api.paths().includes(live.files.live), 'Live Photo video stored next to the still');
   ok(live.contentId === 'D5B3C7E2-0001-4C44-9A0B-LIVEPHOTO001', 'Apple content identifier kept');
   ok(live.takenAt === '2024-05-04T06:12:09' && live.tz === '+09:00' && Math.abs(live.gps.lat - 33.4589) < 1e-4, 'EXIF date/offset/GPS stored');
   ok(Object.values(ix1.photos).every(p => p.tags?.includes('봄여행')), 'upload tags applied');
   ok(Object.values(ix1.photos).every(p => ['original', 'preview', 'thumb'].every(k => api.paths().includes(p.files[k]))), 'original + preview + thumb files committed');
+  ok(/^media\/2024\/05\/04\//.test(live.files.original), `media stored in day folders (${live.files.original})`);
+  ok(['index/2023-12.json', 'index/2024-02.json', 'index/2024-05.json'].every(p => api.paths().includes(p)), 'index split into monthly shards');
 
   // place names resolve in the background and are committed
   await A.waitForFunction(() => Object.values(window.__moa.S.index.photos).filter(p => p.place).length === 4, null, { timeout: 30000 });
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  const ix2 = JSON.parse(api.fileText('index.json'));
+  const ix2 = readIndex();
   ok(Object.values(ix2.photos).filter(p => p.place).length === 4, 'reverse-geocoded places committed to index.json');
 
   // date view
@@ -202,7 +218,7 @@ try {
   await A.click('#albumOk');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  const ix3 = JSON.parse(api.fileText('index.json'));
+  const ix3 = readIndex();
   const album = Object.values(ix3.albums)[0];
   ok(album?.name === '제주 3박 4일' && Object.values(ix3.photos).filter(p => p.albums?.includes(album.id)).length === 3, 'album created with 3 selected photos');
   ok(Object.values(ix3.photos).find(p => p.id === live.id).tags.includes('제주'), 'tag edit committed');
@@ -220,7 +236,7 @@ try {
   ok(true, 'bob sees all 5 photos');
   await B.evaluate(() => window.__moa.flush());
   await B.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  ok(JSON.parse(api.fileText('index.json')).members.bob, 'bob joined the member list');
+  ok(readIndex().members.bob, 'bob joined the member list');
 
   // tag view, bob-side
   await B.click('[data-view=tag]');
@@ -231,7 +247,9 @@ try {
   // concurrent edits from both friends → both survive (ref update conflict + replay)
   const [p0, p1] = await B.$$eval('#content .tile', t => [t[0].dataset.id, t[1].dataset.id]);
   const conflictsBefore = api.stats.conflicts;
-  api.commitIndex(ix => { ix.photos[p1].caption = '다른 기기에서 먼저 저장'; }, 'external write');
+  const shardOfP = id => `index/${readIndex().photos[id].takenAt.slice(0, 7)}.json`;
+  api.commitJson(shardOfP(p1), d => { d.photos[p1].caption = '다른 기기에서 먼저 저장'; }, 'external write');
+  const shardShas = Object.fromEntries(api.paths().filter(p => p.startsWith('index/')).map(p => [p, api.shaOf(p)]));
   await B.click(`#content .tile[data-id="${p0}"]`);
   await B.click('[data-v=like]');
   await Promise.all([
@@ -240,10 +258,13 @@ try {
   ]);
   await B.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  const ix4 = JSON.parse(api.fileText('index.json'));
+  const ix4 = readIndex();
   ok(ix4.photos[p0].likes?.includes('bob'), 'bob\'s like saved');
   ok(ix4.photos[p1].tags?.includes('동시편집') && ix4.photos[p1].caption === '다른 기기에서 먼저 저장', 'alice\'s concurrent tag merged with the external caption');
   ok(api.stats.conflicts > conflictsBefore, `fast-forward conflicts happened and were retried (${api.stats.conflicts - conflictsBefore})`);
+  const touched = Object.keys(shardShas).filter(p => api.shaOf(p) !== shardShas[p]).sort();
+  const expected = [...new Set([shardOfP(p0), shardOfP(p1)])].sort();
+  ok(JSON.stringify(touched) === JSON.stringify(expected), `edits rewrote only the touched shards (${touched.join(', ')})`);
   // comment
   await B.click('[data-v=comments]');
   await B.fill('#iCmt', '여기 또 가자!');
@@ -268,7 +289,7 @@ try {
   await A.click('#iPlaceRes [data-r="0"]');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  ok(JSON.parse(api.fileText('index.json')).photos[noGps.id].place?.name === '산방산', 'place set manually from search');
+  ok(readIndex().photos[noGps.id].place?.name === '산방산', 'place set manually from search');
   await A.click('[data-v=info]');
   await A.click('[data-v=close]');
 
@@ -280,12 +301,13 @@ try {
   await A.click('[data-i=delete]');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  ok(!JSON.parse(api.fileText('index.json')).photos[p1] && !api.paths().includes(victim.files.thumb) && !api.paths().includes(victim.files.original), 'delete removes entry and its files');
+  ok(!readIndex().photos[p1] && !api.paths().includes(victim.files.thumb) && !api.paths().includes(victim.files.original), 'delete removes entry and its files');
 
   // duplicate upload is skipped
   await A.keyboard.press('Escape'); // closes the info panel
   await A.keyboard.press('Escape'); // closes the viewer
-  ok(await A.isHidden('#viewer'), 'Escape closes info panel, then viewer');
+  await A.waitForSelector('#viewer', { state: 'hidden' });
+  ok(true, 'Escape closes info panel, then viewer');
   await A.setInputFiles('#fileInput', [files[2]]);
   await A.waitForSelector('#upGo');
   ok((await A.textContent('.up-summary')).includes('중복 1개'), 're-uploading the same file is flagged as duplicate');
@@ -296,6 +318,7 @@ try {
   await A.waitForSelector('#tab-settings .panel');
   const settingsText = await A.textContent('#tab-settings');
   ok(settingsText.includes('@alice') && settingsText.includes('@bob') && settingsText.includes('저장 공간'), 'settings lists members and storage');
+  ok(settingsText.includes('남은') && settingsText.includes('10GB') && await A.locator('#tab-settings .dot').count() >= 5, 'storage ring + GitHub limit rows rendered');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/09-settings.png`, fullPage: true });
   await A.click('[data-act=invite]');
   const link = await A.inputValue('#inviteLink');
@@ -309,7 +332,46 @@ try {
   await A.click('[data-album]');
   ok((await A.textContent('#hero h1')) === '제주 3박 4일', 'album page opens');
 
+  for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute (peak ${api.maxPushesPerMinute(u)})`);
   console.log(`\nmock API: ${api.stats.requests} requests, ${api.stats.commits} commits, ${api.stats.conflicts} conflicts`);
+
+  // ---------- a v1 album (single index.json) migrates, and a nearly full repo warns ----------
+  const legacy = createMockGitHub({ owner: 'carol', repo: 'old', users: { 'tok-carol': 'carol' } });
+  await new Promise(r => legacy.server.listen(API_PORT + 1, r));
+  const old = { app: 'moa', version: 1, title: '예전 앨범', createdAt: '2025-01-01T00:00:00Z', members: { carol: { joinedAt: '2025-01-01T00:00:00Z' } }, albums: {},
+    photos: { x1: { id: 'x1', kind: 'photo', name: 'a.jpg', takenAt: '2025-03-01T10:00:00', ts: 1740790800000, files: { thumb: 'thumb/2025/03/x1.jpg', preview: 'preview/2025/03/x1.jpg' }, sizes: { preview: 500000, thumb: 40000 }, by: 'carol', uploadedAt: '2025-03-02T00:00:00Z' } } };
+  legacy.api.putFile('index.json', JSON.stringify(old));
+  legacy.api.putFile('thumb/2025/03/x1.jpg', TILE);
+  legacy.api.putFile('preview/2025/03/x1.jpg', TILE);
+  legacy.api.setSizeKB(Math.round(9.7 * 1024 * 1024));
+  const ctxC = await browser.newContext(phone);
+  await stub(ctxC);
+  const Cp = await ctxC.newPage();
+  Cp.on('pageerror', e => { console.log('pageerror(C):', e.message); failures++; });
+  await Cp.goto(`${APP}#join=carol/old&api=${encodeURIComponent(`http://localhost:${API_PORT + 1}`)}`);
+  await Cp.fill('input[name=token]', 'tok-carol');
+  await Cp.click('#connectForm button[type=submit]');
+  await Cp.waitForSelector('#content .tile');
+  ok(true, 'v1 index.json album opens');
+  const banner = await Cp.textContent('.cap-banner');
+  ok(/97%/.test(banner) && (await Cp.getAttribute('.cap-banner', 'class')).includes('danger'), `nearly full repository shows a warning banner ("${banner.trim()}")`);
+  if (SHOTS) await Cp.screenshot({ path: `${SHOTS}/11-capacity-banner.png` });
+  await Cp.click('#content .tile');
+  await Cp.click('[data-v=like]');
+  await Cp.evaluate(() => window.__moa.flush());
+  await Cp.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 30000 });
+  const lp = legacy.api.paths();
+  ok(!lp.includes('index.json') && lp.includes('album.json') && lp.includes('index/2025-03.json') && readIndex(legacy.api).photos.x1.likes?.includes('carol'), 'first edit migrates index.json → album.json + monthly shards');
+  await Cp.click('[data-v=close]');
+  // the repository is now 100 KB short of 10 GB, so this photo tips it over
+  await Cp.evaluate(kb => { window.__moa.S.repoInfo.size = kb; }, 10 * 1024 * 1024 - 100);
+  await Cp.setInputFiles('#fileInput', [files[0]]);
+  await Cp.waitForSelector('#upGo');
+  ok(await Cp.isDisabled('#upGo') && await Cp.isVisible('#upAck'), 'upload past the 10GB guidance needs an explicit acknowledgement');
+  await Cp.check('#upAck');
+  ok(!(await Cp.isDisabled('#upGo')), 'acknowledging enables the upload button');
+  if (SHOTS) { await Cp.waitForTimeout(500); await Cp.screenshot({ path: `${SHOTS}/12-upload-over-limit.png` }); }
+  legacy.server.close();
 } finally {
   await browser.close();
   apiServer.close();

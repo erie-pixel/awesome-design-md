@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
   <meta name="description" content="Moa — GitHub 저장소에 담는 친구들과의 공유앨범. 라이브 포토, 날짜·장소별 보기, 태그.">
   <title>Moa — 공유앨범</title>
   <link rel="manifest" href="manifest.webmanifest">
@@ -46,6 +47,7 @@
               <input type="search" id="searchInput" placeholder="태그, 장소, 설명, 올린 사람 검색" autocomplete="off" enterkeyhint="search">
             </div>
             <div class="seg" id="viewSeg" role="tablist">
+              <span class="seg-thumb" id="segThumb" aria-hidden="true"></span>
               <button data-view="date" role="tab">날짜</button>
               <button data-view="place" role="tab">장소</button>
               <button data-view="map" role="tab">지도</button>
@@ -62,9 +64,13 @@
       </main>
 
       <nav class="tabbar" id="tabbar">
+        <div class="tabs">
+        <span class="tab-thumb" id="tabThumb" aria-hidden="true"></span>
         <button data-tab="photos" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg><span>보관함</span></button>
         <button data-tab="albums"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="6" width="15" height="15" rx="2.5"/><path d="M7 3h11.5A2.5 2.5 0 0 1 21 5.5V17"/></svg><span>앨범</span></button>
         <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17.5" cy="9" r="2.6"/><path d="M17.5 14.3c2.3.2 3.7 1.8 4 4.2"/></svg><span>공유·설정</span></button>
+        </div>
+        <button class="fab" id="uploadFab" aria-label="업로드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </nav>
 
       <div class="select-bar" id="selectBar" hidden>
@@ -79,6 +85,7 @@
 
     <!-- full-screen photo viewer -->
     <div class="viewer" id="viewer" hidden>
+      <div class="v-backdrop" id="vBackdrop"></div>
       <div class="v-top">
         <button class="v-btn" data-v="close" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></button>
         <div class="v-title"><b id="vDate"></b><span id="vSub"></span></div>

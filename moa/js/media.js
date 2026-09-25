@@ -8,7 +8,7 @@
 
 import { kindOf, extOf, metaFromExif, parseQuickTime, metaFromQuickTime, pairLivePhotos, tsOf, localISO, localTz } from './core.js';
 
-export const MAX_FILE = 95 * 1024 * 1024; // GitHub rejects files over 100 MB
+export const MAX_FILE = 95 * 1024 * 1024; // GitHub enforces 100 MB per object; keep headroom for the API upload
 const HEIC2ANY = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
 
 async function sha256(buf) {
@@ -28,7 +28,7 @@ export async function analyzeFile(file, key) {
   const kind = kindOf(file.name, mime);
   const item = { key, file, name: file.name, kind, mime, size: file.size, meta: {}, error: null };
   if (!kind) { item.error = '지원하지 않는 형식'; return item; }
-  if (file.size > MAX_FILE) { item.error = '100MB 초과 (GitHub 제한)'; return item; }
+  if (file.size > MAX_FILE) { item.error = '100MB 초과 (GitHub 제한)'; item.tooBig = true; return item; }
   const buf = await file.arrayBuffer();
   item.hash = await sha256(buf);
   try {

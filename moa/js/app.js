@@ -9,6 +9,7 @@ import * as C from './core.js';
 import { Repo, blobToBase64, clearMediaCache } from './github.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
+import * as LIM from './limits.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -58,29 +59,77 @@ function toast(msg, ms = 2600) {
   toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
-let sheetOnClose = null;
+// Bottom sheet: transitions (not keyframes) so open/close can be
+// interrupted; drawer curve in, quicker ease-out away; flick to dismiss.
+let sheetOnClose = null, sheetTimer = null;
+const sheetOpen = () => $('#scrim').classList.contains('open');
 function openSheet(html, { onClose, kind = '' } = {}) {
-  closeSheet();
-  const sh = $('#sheet');
+  const sc = $('#scrim'), sh = $('#sheet');
+  clearTimeout(sheetTimer);
+  const prev = sheetOnClose; sheetOnClose = null; prev?.();
+  const wasOpen = sheetOpen();
   sh.dataset.kind = kind;
   sh.innerHTML = '<div class="grab"></div>' + html;
-  $('#scrim').hidden = false;
+  sh.scrollTop = 0;
+  sh.style.transform = '';
+  sc.hidden = false;
+  if (!wasOpen) { void sc.offsetWidth; sc.classList.add('open'); }
   sheetOnClose = onClose || null;
   return sh;
 }
 function closeSheet() {
-  if ($('#scrim').hidden) return;
-  $('#scrim').hidden = true;
-  $('#sheet').innerHTML = '';
-  $('#sheet').dataset.kind = '';
+  const sc = $('#scrim'), sh = $('#sheet');
+  if (!sheetOpen()) return;
+  sc.classList.remove('open');
+  sh.dataset.kind = '';
   const f = sheetOnClose; sheetOnClose = null; f?.();
+  clearTimeout(sheetTimer);
+  sheetTimer = setTimeout(() => { if (!sheetOpen()) { sc.hidden = true; sh.innerHTML = ''; sh.style.transform = ''; } }, 240);
 }
 
-function setSync(state) {
+function bindSheetDrag() {
+  const sh = $('#sheet');
+  let d = null;
+  sh.addEventListener('pointerdown', e => {
+    if (!matchMedia('(max-width: 719px)').matches || d) return; // one pointer at a time
+    if (e.target.closest('input, textarea, select, button, a, .up-list, .chips') || sh.scrollTop > 0) return;
+    d = { y: e.clientY, t: performance.now(), id: e.pointerId, dy: 0, active: false };
+  });
+  sh.addEventListener('pointermove', e => {
+    if (!d || e.pointerId !== d.id) return;
+    const dy = e.clientY - d.y;
+    if (!d.active) {
+      if (Math.abs(dy) < 6) return;
+      d.active = true;
+      sh.setPointerCapture(e.pointerId);
+      sh.classList.add('dragging');
+    }
+    // downward follows the finger, upward meets friction
+    d.dy = dy > 0 ? dy : -Math.sqrt(-dy) * 2;
+    sh.style.transform = `translateY(${d.dy}px)`;
+  });
+  const end = e => {
+    if (!d || e.pointerId !== d.id) return;
+    const { dy, t, active } = d;
+    d = null;
+    if (!active) return;
+    sh.classList.remove('dragging');
+    const velocity = dy / (performance.now() - t);
+    if (dy > sh.offsetHeight * 0.3 || (dy > 12 && velocity > 0.11)) {
+      sh.style.transform = 'translateY(100%)';
+      closeSheet();
+    } else sh.style.transform = '';
+  };
+  sh.addEventListener('pointerup', end);
+  sh.addEventListener('pointercancel', end);
+}
+
+function setSync(state, arg) {
   const el = $('#sync');
   el.hidden = !state;
   el.classList.toggle('err', state === 'error');
-  el.textContent = { pending: '저장 대기', saving: '저장 중…', error: '저장 실패', loading: '불러오는 중…' }[state] || '';
+  el.classList.toggle('info', state === 'throttle');
+  el.textContent = { pending: '저장 대기', saving: '저장 중…', error: '저장 실패', loading: '불러오는 중…', throttle: `속도 조절 ${arg}초` }[state] || '';
 }
 
 const fmtDur = s => { const t = Math.max(0, Math.floor(s || 0)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
@@ -240,6 +289,8 @@ async function openSpace(sp) {
   save(LS.current, sp.id);
   S.gh = new Repo(sp);
   S.gh.onWait = s => toast(`GitHub 요청 한도에 걸려 ${s}초 기다리는 중…`, 5000);
+  // GitHub recommends ≤ 6 pushes/minute per repository; the client paces itself
+  S.gh.onThrottle = s => { setSync('throttle', s); if (!S.throttleToast) { S.throttleToast = true; toast('GitHub 권장 저장 속도(분당 6회)에 맞춰 잠시 쉬었다 저장해요', 3500); } };
   S.pending = load(LS.pending(sp.id), []);
   Object.assign(S, { index: null, head: null, base: null, album: null, me: null, tab: 'photos' });
   S.filter = { kind: '', tag: '', q: '' };
@@ -278,7 +329,7 @@ async function loadOfflineIndex() {
     if (!hit) return false;
     const { head, index } = await hit.json();
     S.me ||= { login: '' };
-    adopt(head, index);
+    adopt({ head, index, files: null });
     return true;
   } catch { return false; }
 }
@@ -290,11 +341,12 @@ async function refresh(first = false) {
   if (S.space !== sp) return;
   if (!head) { S.head = null; S.index = null; return renderInit(true); }
   if (head === S.head && !first) return;
-  const ix = await S.gh.index(head);
+  const st = await S.gh.state(head);
   if (S.space !== sp) return;
-  if (!ix) { S.head = head; S.index = null; return renderInit(false); }
+  if (!st.index) { S.head = head; S.index = null; return renderInit(false); }
+  const ix = st.index;
   const before = S.index ? Object.keys(S.index.photos).length : null;
-  adopt(head, ix);
+  adopt(st);
   const after = Object.keys(S.index.photos).length;
   if (!first && before != null && after > before) toast(`새 사진 ${after - before}장이 올라왔어요`);
   S.gh.primeCache('.moa/index-cache.json', new Blob([JSON.stringify({ head, index: ix })], { type: 'application/json' }));
@@ -302,10 +354,11 @@ async function refresh(first = false) {
   runGeocodeJob();
 }
 
-function adopt(head, ix) {
-  S.head = head;
-  S.base = { head, index: ix };
-  S.index = C.applyOps(structuredClone(ix), S.pending);
+/** Take a fetched/committed album state { head, index, files } as the new base. */
+function adopt(st) {
+  S.head = st.head;
+  S.base = st;
+  S.index = C.applyOps(structuredClone(st.index), S.pending);
   $('#spaceName').textContent = S.index.title || S.space.repo;
   if (S.album && !S.index.albums[S.album]) S.album = null;
   rerender();
@@ -329,10 +382,10 @@ function edit(op) {
   rerender();
 }
 
-function scheduleFlush(ms = 1200) {
+function scheduleFlush(ms = 2500) {
   clearTimeout(flushTimer);
   setSync('pending');
-  const overdue = Date.now() - firstPendingAt > 8000;
+  const overdue = Date.now() - firstPendingAt > 12000;
   flushTimer = setTimeout(flush, overdue ? 0 : ms);
 }
 
@@ -356,7 +409,7 @@ function flush() {
       S.pending = S.pending.slice(ops.length);
       savePending();
       if (S.pending.length) firstPendingAt = Date.now();
-      adopt(r.head, r.index);
+      adopt(r);
       setSync(S.pending.length ? 'pending' : null);
       if (S.pending.length) scheduleFlush(400);
     } catch (e) {
@@ -392,6 +445,7 @@ function rerender() {
 function render() {
   if (!S.index) return;
   $('#uploadBtn').hidden = !S.canWrite;
+  $('#uploadFab').hidden = !S.canWrite;
   $('#selectBtn').hidden = S.tab !== 'photos' || S.view === 'map' || !S.canWrite;
   $('#searchBtn').hidden = S.tab !== 'photos';
   if (S.tab === 'photos') renderPhotos();
@@ -403,7 +457,9 @@ function showTab(tab, draw = true) {
   S.tab = tab;
   if (tab !== 'photos') setSelecting(false);
   $$('.tab').forEach(t => { t.hidden = t.id !== 'tab-' + tab; });
-  $$('#tabbar button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  const tabs = ['photos', 'albums', 'settings'];
+  $$('#tabbar [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  $('#tabThumb').style.transform = `translateX(${tabs.indexOf(tab) * 100}%)`;
   if (draw) { render(); window.scrollTo(0, 0); }
 }
 
@@ -412,6 +468,7 @@ function renderInit(empty) {
   $('#hero').innerHTML = '';
   $('#toolbar').hidden = true;
   $('#uploadBtn').hidden = true;
+  $('#uploadFab').hidden = true;
   $('#selectBtn').hidden = true;
   setSync(null);
   const c = $('#content');
@@ -432,7 +489,7 @@ function renderInit(empty) {
       if (empty) await S.gh.seed('README.md', repoReadme(title), 'Moa 앨범 시작');
       const r = await S.gh.commit({ ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: 앨범 만들기 — @${S.me.login}`, title });
       $('#toolbar').hidden = false;
-      adopt(r.head, r.index);
+      adopt(r);
       toast('앨범을 만들었어요. 사진을 올려보세요!');
     } catch (e) {
       btn.disabled = false; btn.textContent = '앨범 만들기';
@@ -442,7 +499,67 @@ function renderInit(empty) {
 }
 
 function repoReadme(title) {
-  return `# ${title}\n\n[Moa](https://github.com/erie-pixel/awesome-design-md/tree/main/moa) 공유앨범 저장소예요.\n\n- \`index.json\` — 사진 정보, 태그, 앨범, 댓글\n- \`media/\` — 원본 사진·동영상 (\`*.live.mov\` 는 라이브 포토 영상)\n- \`preview/\`, \`thumb/\` — 앱에서 보여주는 JPEG\n\n파일을 직접 옮기거나 지우면 앨범이 깨질 수 있으니 Moa 앱에서 관리하세요.\n`;
+  return `# ${title}\n\n[Moa](https://github.com/erie-pixel/awesome-design-md/tree/main/moa) 공유앨범 저장소예요.\n\n- \`album.json\` — 앨범 이름, 멤버, 앨범 목록\n- \`index/YYYY-MM.json\` — 촬영 월별 사진 정보, 태그, 댓글\n- \`media/YYYY/MM/DD/\` — 원본 사진·동영상 (\`*.live.mov\` 는 라이브 포토 영상)\n- \`preview/\`, \`thumb/\` — 앱에서 보여주는 JPEG\n\n파일을 직접 옮기거나 지우면 앨범이 깨질 수 있으니 Moa 앱에서 관리하세요.\n`;
+}
+
+// ---------------- capacity (GitHub repository limits) ----------------
+
+const storageUsage = () => LIM.usage({ repoKB: S.repoInfo?.size || 0, photos: photos() });
+const pctText = r => `${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%`;
+
+function capBanner() {
+  const u = storageUsage();
+  if (u.level === 'ok') return '';
+  const head = u.level === 'over' ? '권장 용량 초과' : `용량 ${pctText(u.ratio)} 사용`;
+  return `<div class="cap-banner ${u.level}"><span><b>${head}</b> · 남은 ${C.fmtBytes(u.remaining)} / 10GB</span><button class="text-btn" data-act="storage">자세히</button></div>`;
+}
+
+function ring(ratio, level) {
+  const R0 = 42, CIRC = 2 * Math.PI * R0;
+  const off = CIRC * (1 - Math.min(1, ratio));
+  return `<div class="ring ${level}"><svg viewBox="0 0 96 96"><circle class="track" cx="48" cy="48" r="${R0}"/><circle class="val" cx="48" cy="48" r="${R0}" stroke-dasharray="${CIRC.toFixed(1)}" stroke-dashoffset="${CIRC.toFixed(1)}" data-off="${off.toFixed(1)}"/></svg><span class="pct">${pctText(ratio)}</span></div>`;
+}
+
+/** Status rows for every GitHub limit Moa can run into. */
+function limitRows() {
+  const all = photos();
+  const u = storageUsage();
+  const big = LIM.largestFile(all);
+  const busy = LIM.busiestDir(LIM.dirCounts(all));
+  const over1 = all.filter(p => Object.values(p.sizes || {}).some(x => x > LIM.LIMITS.objectRecommended)).length;
+  let shard = { path: '', size: 0 };
+  for (const [path, f] of S.base?.files || []) if ((f.size || 0) > shard.size) shard = { path, size: f.size };
+  const pushes = S.gh.recentPushes();
+  const row = (level, title, sub, val) => `<div class="row"><span class="dot ${level}"></span><div class="grow"><b>${title}</b><small>${sub}</small></div><span class="val">${val}</span></div>`;
+  return [
+    row(u.level, '저장소 크기 · 권장 최대 10GB', 'GitHub 권장치를 넘으면 느려질 수 있어요', `${C.fmtBytes(u.used)}`),
+    row(LIM.levelOf(big.size / LIM.LIMITS.objectHard), '파일 1개 · 최대 100MB', big.size ? `가장 큰 파일 ${esc(big.name || '')}` : '아직 파일이 없어요', C.fmtBytes(big.size)),
+    row('info', '권장 파일 크기 1MB', over1 ? `1MB 넘는 사진 ${over1}장 — 원본은 대부분 커요. 옵션에서 원본 저장을 끄면 줄어요` : '모두 권장 크기 이하', `${over1}장`),
+    row(busy.level, '폴더당 파일 · 권장 최대 3,000개', busy.dir ? `가장 붐비는 폴더 ${esc(busy.dir)}` : '날짜별 폴더로 나눠 저장해요', `${busy.count.toLocaleString()}개`),
+    shard.path ? row(LIM.levelOf(shard.size / LIM.LIMITS.objectRecommended), '앨범 정보 파일 · 권장 1MB', `가장 큰 조각 ${esc(shard.path)} (월별로 나눠 저장)`, C.fmtBytes(shard.size)) : '',
+    row(pushes >= LIM.LIMITS.pushesPerMinute ? 'warn' : 'ok', '저장 속도 · 권장 분당 6회', pushes >= LIM.LIMITS.pushesPerMinute ? '한도에 닿아서 다음 저장은 잠시 기다렸다 해요' : '넘을 것 같으면 앱이 알아서 기다렸다 저장해요', `${pushes}회/분`),
+  ].join('');
+}
+
+function uploadPlanHTML(E, keepOriginal) {
+  const u = storageUsage();
+  const plan = LIM.planUpload(E, { keepOriginal, usage: u });
+  const withOrig = keepOriginal ? plan : LIM.planUpload(E, { keepOriginal: true, usage: u });
+  const noOrig = keepOriginal ? LIM.planUpload(E, { keepOriginal: false, usage: u }) : plan;
+  const tooBig = E.filter(e => e.main.tooBig).length;
+  const n = E.filter(e => !e.skip).length;
+  const li = (level, text) => `<li><span class="dot ${level}"></span><span>${text}</span></li>`;
+  const items = [
+    tooBig ? li('danger', `100MB 넘는 파일 ${tooBig}개는 GitHub가 받지 않아 빼고 올려요`) : '',
+    plan.heavy.length ? li('warn', `50MB 넘는 파일 ${plan.heavy.length}개 — 브라우저 업로드가 느리거나 실패할 수 있어요`) : '',
+    plan.overRecommended.length && keepOriginal ? li('info', `GitHub 권장 파일 크기(1MB)를 넘는 원본 ${plan.overRecommended.length}개 — 원본 저장을 끄면 약 ${C.fmtBytes(withOrig.bytes - noOrig.bytes)} 줄어요`) : '',
+    plan.level !== 'ok' ? li(plan.level, plan.level === 'over' ? `업로드하면 권장 용량 10GB를 넘어요 (${pctText(plan.ratioAfter)})` : `업로드 후 권장 용량의 ${pctText(plan.ratioAfter)}를 쓰게 돼요`) : '',
+    n > 10 ? li('info', `${Math.ceil(n / 10)}번에 나눠 저장해요 (GitHub 권장 분당 6회 이하로 속도 조절)`) : '',
+  ].join('');
+  return { plan, html: `<div class="cap ${plan.level}"><div class="cap-track"><i class="add" style="transform:scaleX(${Math.min(1, plan.ratioAfter).toFixed(4)})"></i><i class="used" style="transform:scaleX(${Math.min(1, plan.ratioBefore).toFixed(4)})"></i></div>
+    <div class="cap-labels"><span>이번 업로드 약 <b>${C.fmtBytes(plan.bytes)}</b></span><span>남은 용량 <b>${C.fmtBytes(plan.remainingAfter)}</b> / 10GB</span></div></div>
+    ${items ? `<ul class="limit-list">${items}</ul>` : ''}
+    ${plan.level === 'over' ? '<label class="ack"><input type="checkbox" id="upAck">GitHub 권장 용량을 넘는 걸 알고 올릴게요 (저장소가 느려질 수 있어요)</label>' : ''}` };
 }
 
 // ---------------- photos tab ----------------
@@ -495,7 +612,7 @@ function renderPhotos() {
     const seen = new Set();
     S.list = groups.flatMap(g => g.photos).filter(p => !seen.has(p.id) && seen.add(p.id));
   }
-  c.innerHTML = html;
+  c.innerHTML = capBanner() + html;
   observeThumbs(c);
 }
 
@@ -541,7 +658,9 @@ function renderHero(all) {
 }
 
 function renderToolbar(all) {
+  const views = ['date', 'place', 'map', 'tag'];
   $$('#viewSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
+  $('#segThumb').style.transform = `translateX(${views.indexOf(S.view) * 100}%)`;
   const ctl = $('#controls');
   if (S.view === 'date') {
     ctl.innerHTML = `<select data-ctl="order" aria-label="정렬"><option value="desc">최신순</option><option value="asc">오래된순</option></select>`;
@@ -691,9 +810,7 @@ function pickAlbum(ids) {
 function renderSettings() {
   const t = $('#tab-settings');
   const all = photos();
-  const used = C.storageBytes(all);
-  const GB = 1024 ** 3;
-  const pct = Math.min(100, (used / GB) * 100);
+  const u = storageUsage();
   const members = Object.entries(S.index.members || {});
   const counts = {};
   all.forEach(p => { counts[p.by] = (counts[p.by] || 0) + 1; });
@@ -709,9 +826,16 @@ function renderSettings() {
     <div class="panel">
       <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? '⚠️ 공개 저장소 — 누구나 사진을 볼 수 있어요' : '비공개 저장소'} · 브랜치 ${esc(S.gh.branch)} · ${S.canWrite ? '쓰기 가능' : '읽기 전용'}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
       ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>앨범 이름</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">변경</span></button>` : ''}
-      <div class="row"><div class="grow"><b>저장 공간 ${C.fmtBytes(used)}</b><small>GitHub 권장 한도 1GB 기준 ${pct.toFixed(pct < 10 ? 1 : 0)}% · 파일당 최대 100MB</small><div class="meter${pct > 80 ? ' warn' : ''}"><i style="width:${pct}%"></i></div></div></div>
     </div>
-    <p class="note">저장소가 너무 커지면 GitHub가 경고를 보낼 수 있어요. 여러 저장소로 나눠 앨범을 운영하면 좋아요 (예: 연도별, 모임별).</p>
+    <h2 class="section-title" id="storageTitle">저장 공간</h2>
+    <div class="panel">
+      <div class="storage">${ring(u.ratio, u.level)}<div style="min-width:0"><div class="big">남은 ${C.fmtBytes(u.remaining)}</div><div class="sub">${C.fmtBytes(u.used)} / 10GB 사용 · GitHub 권장 최대</div>
+        <div class="legend"><span><i style="background:var(--primary)"></i>원본 ${C.fmtBytes(u.breakdown.original)}</span><span><i style="background:#ff9f0a"></i>라이브 ${C.fmtBytes(u.breakdown.live)}</span><span><i style="background:#30d158"></i>미리보기·썸네일 ${C.fmtBytes(u.breakdown.preview + u.breakdown.thumb)}</span></div></div></div>
+      <div class="row"><div class="grow"><b>GitHub가 잰 저장소 크기</b><small>지운 사진의 이력까지 포함 · 업로드 후 늦게 갱신돼요</small></div><span class="val">${C.fmtBytes(u.repo)}</span></div>
+    </div>
+    <h2 class="section-title">GitHub 저장소 한도</h2>
+    <div class="panel">${limitRows()}</div>
+    <p class="note">GitHub Docs "Repository limits" 기준이에요. 권장치를 넘어도 바로 막히진 않지만 저장소가 느려질 수 있어요. 100MB 파일 제한만 강제예요. 모임별·연도별로 저장소를 나누면 여유 있게 쓸 수 있어요.</p>
     <h2 class="section-title">다른 앨범 저장소</h2>
     <div class="panel">
       ${S.spaces.map(s => `<div class="row"><button class="grow" data-space="${esc(s.id)}"><b>${esc(s.owner)}/${esc(s.repo)}</b><small>${s.id === S.space.id ? '<span class="tick">사용 중</span>' : '눌러서 전환'}</small></button><button class="text-btn danger" data-unlink="${esc(s.id)}">연결 해제</button></div>`).join('')}
@@ -725,6 +849,8 @@ function renderSettings() {
       <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>이 기기의 사진 캐시 비우기</b><small>저장소의 사진은 그대로예요</small></span></button>
     </div>
     <p class="note">@${esc(S.me?.login || '')}로 연결됨 · 토큰은 이 브라우저에만 저장돼요. 공용 기기라면 사용 후 연결 해제하세요.</p>`;
+  // draw the ring from empty once it's on screen
+  requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', t).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
 }
 
 function inviteSheet() {
@@ -805,29 +931,99 @@ function deletePhotos(ids, after) {
 // viewer
 // ============================================================
 
-const V = { list: [], i: 0, p: null, token: 0, info: false, hold: null, holding: false, down: null, sub: null };
+const V = { list: [], i: 0, p: null, token: 0, info: false, hold: null, holding: false, down: null, closing: false };
 const stage = () => $('#vStage');
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const EASE_OUT = 'cubic-bezier(0.23, 1, 0.32, 1)';
+const EASE_DRAWER = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
-function openViewer(id, list = S.list) {
+function tileRect(id) {
+  const t = document.querySelector(`#content .tile[data-id="${CSS.escape(id)}"]`);
+  if (!t) return null;
+  const r = t.getBoundingClientRect();
+  return r.width && r.bottom > 0 && r.top < innerHeight ? r : null;
+}
+
+/**
+ * Keyframes that grow a square grid tile into the full photo (FLIP):
+ * translate + scale the media layer onto the tile, and clip-path crop
+ * it to the tile's square so the thumbnail and the photo read as one object.
+ */
+function zoomFrames(from, p) {
+  const img = $('#vImg');
+  const nw = p.w || img.naturalWidth, nh = p.h || img.naturalHeight;
+  const box = $('#vMedia').getBoundingClientRect();
+  if (!nw || !nh || !box.width) return null;
+  const fit = Math.min(box.width / nw, box.height / nh);
+  const cw = nw * fit, ch = nh * fit;
+  const s = Math.max(from.width / cw, from.height / ch);
+  const dx = from.left + from.width / 2 - (box.left + box.width / 2);
+  const dy = from.top + from.height / 2 - (box.top + box.height / 2);
+  const ix = Math.max(0, ((box.width - from.width / s) / 2 / box.width) * 100);
+  const iy = Math.max(0, ((box.height - from.height / s) / 2 / box.height) * 100);
+  const radius = innerWidth >= 820 ? 6 / s : 0;
+  return [
+    { transform: `translate(${dx}px, ${dy}px) scale(${s})`, clipPath: `inset(${iy}% ${ix}% ${iy}% ${ix}% round ${radius}px)` },
+    { transform: 'translate(0px, 0px) scale(1)', clipPath: 'inset(0% 0% 0% 0% round 0px)' },
+  ];
+}
+
+function fadeChrome(show, delay = 0) {
+  for (const el of $$('#viewer .v-top, #viewer .v-bottom, #livePill')) {
+    el.animate([{ opacity: show ? 0 : 1 }, { opacity: show ? 1 : 0 }], { duration: show ? 200 : 120, delay, easing: 'ease', fill: show ? 'none' : 'forwards' });
+  }
+}
+
+function openViewer(id, list = S.list, fromEl = null) {
   V.list = list.map(p => p.id);
   V.i = V.list.indexOf(id);
-  if (V.i < 0) return;
+  if (V.i < 0 || V.closing) return;
+  const from = fromEl?.getBoundingClientRect() || null;
   $('#viewer').hidden = false;
+  $('#viewer').classList.remove('bare', 'dragging');
   document.body.style.overflow = 'hidden';
   history.pushState({ moaViewer: true }, '');
   showCurrent();
+  const p = V.p, media = $('#vMedia'), bd = $('#vBackdrop');
+  const frames = from && p && !reduceMotion() && zoomFrames(from, p);
+  if (frames) media.animate(frames, { duration: 380, easing: EASE_DRAWER });
+  bd.animate([{ opacity: 0 }, { opacity: 1 }], { duration: frames ? 300 : 200, easing: 'ease' });
+  fadeChrome(true, frames ? 120 : 0);
 }
 
 function closeViewer(fromPop = false) {
-  if ($('#viewer').hidden) return;
+  const viewer = $('#viewer');
+  if (viewer.hidden || V.closing) return;
+  V.closing = true;
   stopLive();
-  const vv = $('#vVideo'); vv.pause(); vv.removeAttribute('src'); vv.load();
-  $('#viewer').hidden = true;
-  $('#vInfo').hidden = true;
-  $('#viewer').classList.remove('info-open');
-  V.info = false;
-  V.miniMap?.remove(); V.miniMap = null;
-  document.body.style.overflow = '';
+  $('#vVideo').pause();
+  const media = $('#vMedia'), bd = $('#vBackdrop');
+  const p = V.p;
+  const current = media.style.transform || 'translate(0px, 0px) scale(1)';
+  const bdFrom = bd.style.opacity || '1';
+  const to = p && !V.info && !reduceMotion() ? tileRect(p.id) : null;
+  const frames = to && zoomFrames(to, p);
+  let ms = 200;
+  media.getAnimations().forEach(a => a.cancel());
+  if (frames) {
+    frames.reverse();
+    frames[0].transform = current;
+    media.animate(frames, { duration: ms = 280, easing: EASE_OUT, fill: 'forwards' });
+  } else if (!reduceMotion()) {
+    media.animate([{ transform: current, opacity: 1 }, { transform: `${current} scale(0.94)`, opacity: 0 }], { duration: ms, easing: EASE_OUT, fill: 'forwards' });
+  } else media.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: 'ease', fill: 'forwards' });
+  bd.animate([{ opacity: bdFrom }, { opacity: 0 }], { duration: ms, easing: 'ease', fill: 'forwards' });
+  fadeChrome(false);
+  if (V.info) { $('#vInfo').hidden = true; viewer.classList.remove('info-open'); V.info = false; V.miniMap?.remove(); V.miniMap = null; }
+  setTimeout(() => {
+    const vv = $('#vVideo'); vv.removeAttribute('src'); vv.load();
+    viewer.hidden = true;
+    viewer.classList.remove('dragging', 'bare');
+    media.style.transform = ''; bd.style.opacity = '';
+    for (const el of [media, bd, ...$$('#viewer .v-top, #viewer .v-bottom, #livePill')]) el.getAnimations().forEach(a => a.cancel());
+    document.body.style.overflow = '';
+    V.closing = false;
+  }, ms);
   if (!fromPop && history.state?.moaViewer) history.back();
 }
 window.addEventListener('popstate', () => { if (!$('#viewer').hidden) closeViewer(true); });
@@ -884,7 +1080,8 @@ async function showCurrent() {
   } else {
     vid.hidden = true;
     img.hidden = false;
-    img.removeAttribute('src');
+    const ready = resolved.get(S.space.id + ':' + p.files.thumb);
+    if (ready) { img.src = ready; img.style.filter = 'blur(6px)'; } else img.removeAttribute('src');
     try {
       const tu = await mediaURL(p.files.thumb, 'image/jpeg');
       if (token !== V.token) return;
@@ -910,11 +1107,20 @@ async function showCurrent() {
   }
 }
 
-function go(d) {
+/** Next/previous. From a swipe it slides; keys and buttons switch instantly (never animate keyboard actions). */
+function go(d, fromDx = null) {
   const j = V.i + d;
+  const media = $('#vMedia');
   if (j < 0 || j >= V.list.length) return;
-  V.i = j;
-  showCurrent();
+  if (fromDx == null || reduceMotion()) { V.i = j; showCurrent(); return; }
+  const w = stage().offsetWidth;
+  media.animate([{ transform: `translateX(${fromDx}px)` }, { transform: `translateX(${-d * w}px)` }], { duration: 160, easing: EASE_OUT, fill: 'forwards' })
+    .finished.then(() => {
+      V.i = j;
+      showCurrent();
+      media.getAnimations().forEach(a => a.cancel());
+      media.animate([{ transform: `translateX(${d * w * 0.25}px)`, opacity: 0 }, { transform: 'translateX(0px)', opacity: 1 }], { duration: 240, easing: EASE_OUT });
+    });
 }
 
 async function playLive(sound) {
@@ -950,29 +1156,60 @@ function bindViewer() {
   pill.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') playLive(false); });
 
   st.addEventListener('pointerdown', e => {
-    if (e.button > 0 || e.target.closest('button') || (e.target.id === 'vVideo')) return;
-    V.down = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
+    if (V.down || V.closing || e.button > 0 || e.target.closest('button') || e.target.id === 'vVideo') return;
+    V.down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, axis: null, dx: 0, dy: 0 };
     st.setPointerCapture?.(e.pointerId);
     if (V.p?.files?.live) V.hold = setTimeout(() => { V.holding = true; playLive(true); }, 230);
   });
   st.addEventListener('pointermove', e => {
-    if (!V.down) return;
-    const dx = e.clientX - V.down.x, dy = e.clientY - V.down.y;
-    if (!V.down.moved && Math.hypot(dx, dy) > 10) { V.down.moved = true; clearTimeout(V.hold); }
-    if (V.down.moved && !V.holding && Math.abs(dx) > Math.abs(dy)) { media.classList.add('drag'); media.style.transform = `translateX(${dx}px)`; }
+    const d = V.down;
+    if (!d || e.pointerId !== d.id || V.holding) return;
+    let dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (!d.axis) {
+      if (Math.hypot(dx, dy) < 10) return;
+      d.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      clearTimeout(V.hold);
+      if (d.axis === 'y' && (dy < 0 || V.info)) { d.axis = 'none'; return; }
+      if (d.axis === 'y') $('#viewer').classList.add('dragging');
+    }
+    if (d.axis === 'x') {
+      const edge = (dx > 0 && V.i === 0) || (dx < 0 && V.i === V.list.length - 1);
+      if (edge) dx = Math.sign(dx) * Math.sqrt(Math.abs(dx)) * 4; // rubber-band past the ends
+      media.style.transform = `translateX(${dx}px)`;
+    } else if (d.axis === 'y') {
+      dy = Math.max(0, dy);
+      const k = Math.min(1, dy / innerHeight);
+      media.style.transform = `translate(${dx * 0.6}px, ${dy}px) scale(${1 - k * 0.35})`;
+      $('#vBackdrop').style.opacity = String(Math.max(0, 1 - k * 1.6));
+    }
+    d.dx = dx; d.dy = dy;
   });
-  const end = e => {
-    if (!V.down) return;
-    clearTimeout(V.hold);
-    const dx = e.clientX - V.down.x, dy = e.clientY - V.down.y;
-    const tap = !V.down.moved && Date.now() - V.down.t < 230;
-    media.classList.remove('drag');
+  const settle = () => {
+    const from = media.style.transform;
     media.style.transform = '';
-    if (V.holding) { V.holding = false; stopLive(); }
-    else if (V.down.moved && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1);
-    else if (V.down.moved && dy > 110 && Math.abs(dy) > Math.abs(dx) && !V.info) closeViewer();
-    else if (tap) $('#viewer').classList.toggle('bare');
+    if (from) media.animate([{ transform: from }, { transform: 'translate(0px, 0px) scale(1)' }], { duration: 320, easing: EASE_DRAWER });
+    const bd = $('#vBackdrop');
+    if (bd.style.opacity) { bd.animate([{ opacity: bd.style.opacity }, { opacity: 1 }], { duration: 240, easing: 'ease' }); bd.style.opacity = ''; }
+    $('#viewer').classList.remove('dragging');
+  };
+  const end = e => {
+    const d = V.down;
+    if (!d || e.pointerId !== d.id) return;
     V.down = null;
+    clearTimeout(V.hold);
+    const dt = Math.max(1, performance.now() - d.t);
+    if (V.holding) { V.holding = false; stopLive(); return; }
+    if (d.axis === 'x') {
+      const v = Math.abs(d.dx) / dt, dir = d.dx < 0 ? 1 : -1;
+      const hasNext = V.i + dir >= 0 && V.i + dir < V.list.length;
+      if (hasNext && (Math.abs(d.dx) > stage().offsetWidth * 0.25 || (Math.abs(d.dx) > 20 && v > 0.11))) {
+        const dx = d.dx; media.style.transform = ''; go(dir, dx);
+      } else settle();
+    } else if (d.axis === 'y') {
+      const v = d.dy / dt;
+      if (d.dy > 110 || (d.dy > 20 && v > 0.11)) closeViewer(); // a flick is enough
+      else settle();
+    } else if (!d.axis && performance.now() - d.t < 230) $('#viewer').classList.toggle('bare');
   };
   st.addEventListener('pointerup', end);
   st.addEventListener('pointercancel', end);
@@ -994,14 +1231,20 @@ function bindViewer() {
       case 'next': return go(1);
       case 'info': return toggleInfo();
       case 'comments': toggleInfo(true); setTimeout(() => $('#iCmt')?.focus(), 80); return;
-      case 'like': return edit({ op: 'like', id: p.id, user: S.me.login, on: !p.likes?.includes(S.me.login) });
+      case 'like': {
+        const on = !p.likes?.includes(S.me.login);
+        edit({ op: 'like', id: p.id, user: S.me.login, on });
+        viewerChrome();
+        if (on && !reduceMotion()) $('#vLike svg').animate([{ transform: 'scale(1)' }, { transform: 'scale(1.28)' }, { transform: 'scale(1)' }], { duration: 360, easing: EASE_OUT });
+        return;
+      }
       case 'download': return download(p);
     }
   });
 
   document.addEventListener('keydown', e => {
     if ($('#viewer').hidden || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) {
-      if (e.key === 'Escape' && !$('#scrim').hidden) closeSheet();
+      if (e.key === 'Escape' && sheetOpen()) closeSheet();
       return;
     }
     if (e.key === 'ArrowRight') go(1);
@@ -1183,6 +1426,7 @@ async function handleFiles(fileList) {
     e.dup = !!e.main.hash && (hashes.has(e.main.hash) || seen.has(e.main.hash));
     if (e.main.hash) seen.add(e.main.hash);
     e.skip = !!e.main.error || e.dup;
+    e.main.tooBig = !!e.main.tooBig;
     e.status = e.skip ? (e.main.error || '이미 있음') : '';
   }
   U.entries = entries;
@@ -1206,12 +1450,13 @@ function showUploadSheet(review) {
     const m = e.main;
     e.url ||= m.kind === 'photo' ? URL.createObjectURL(m.file) : '';
     return `<div class="up-item${e.skip ? ' skip' : ''}" id="up-${m.key}">${e.url ? `<img alt="" src="${e.url}" loading="lazy" onerror="this.remove()">` : ''}
-      <div class="flags">${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? '<b class="gps">위치</b>' : ''}</div>
+      <div class="flags">${Math.max(m.size, e.live?.size || 0) >= LIM.LIMITS.apiUpload ? '<b class="big">대용량</b>' : ''}${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? '<b class="gps">위치</b>' : ''}</div>
       <span class="nm">${esc(m.name)}</span>${e.status ? `<span class="st${e.status === '완료' ? ' done' : e.failed ? ' fail' : ''}">${esc(e.status)}</span>` : ''}</div>`;
   }).join('');
   const noMeta = go.filter(e => e.main.kind === 'photo' && e.main.meta.dateSource === 'file').length;
   const sh = openSheet(`<h2>${review ? `${go.length}개 올리기` : '업로드 중'} ${review ? '' : `<small style="font-size:14px;color:var(--muted);font-weight:400" id="upCount">${U.done}/${U.total}</small>`}</h2>
     <p class="up-summary">${summary}</p>
+    ${review ? `<div id="upPlan">${uploadPlanHTML(E, prefs.keepOriginal).html}</div>` : ''}
     ${!review ? `<div class="progress"><i id="upBar" style="width:${U.total ? (U.done + U.failed) / U.total * 100 : 0}%"></i></div><p class="note" style="margin:6px 0 14px;padding:0">창을 닫아도 계속 올라가요. 앱을 닫지는 마세요.</p>` : ''}
     <div class="up-list">${thumbs}</div>${E.length > 200 ? `<p class="note" style="margin:0 0 12px;padding:0">외 ${E.length - 200}개</p>` : ''}
     ${review ? `
@@ -1230,6 +1475,15 @@ function showUploadSheet(review) {
       <div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="upGo"${go.length ? '' : ' disabled'}>업로드</button></div>` : ''}`,
   { kind: 'upload', onClose: () => { if (!U.running) cleanupUpload(); else updatePill(); } });
   $('#upPill').hidden = true;
+  if (review) {
+    const gate = () => {
+      const { plan } = uploadPlanHTML(E, $('#upOrig', sh).checked);
+      $('#upGo', sh).disabled = !go.length || (plan.level === 'over' && !$('#upAck', sh)?.checked);
+    };
+    $('#upOrig', sh).onchange = () => { $('#upPlan', sh).innerHTML = uploadPlanHTML(E, $('#upOrig', sh).checked).html; gate(); };
+    $('#upPlan', sh).onchange = gate;
+    gate();
+  }
   if (review) $('#upGo', sh).onclick = () => startUpload({
     album: $('#upAlbum', sh).value || null,
     tags: $('#upTags', sh).value.split(/[,，]/).map(C.normalizeTag).filter(Boolean),
@@ -1278,7 +1532,7 @@ async function startUpload(opts) {
     try {
       await serial(async () => {
         const r = await S.gh.commit({ files, ops: [{ op: 'addPhotos', photos: ps }], message: `Moa: 사진 ${ps.length}장 추가 — @${S.me.login}`, base: S.base, title: S.index?.title });
-        if (S.space === sp) adopt(r.head, r.index);
+        if (S.space === sp) adopt(r);
       });
       U.done += es.length;
       es.forEach(e => setEntryStatus(e, '완료'));
@@ -1299,7 +1553,7 @@ async function startUpload(opts) {
       batch.entries.push(e);
       batch.bytes += bytes;
       setEntryStatus(e, '대기');
-      if (batch.photos.length >= 8 || batch.bytes > 40 * 1024 * 1024) await commitBatch();
+      if (batch.photos.length >= 10 || batch.bytes > 50 * LIM.MB) await commitBatch();
     } catch (err) {
       console.error(e.main.name, err);
       U.failed++;
@@ -1313,6 +1567,7 @@ async function startUpload(opts) {
   toast(U.failed ? `${U.done}개 올림 · ${U.failed}개 실패` : `${U.done}개 모두 올렸어요`, 3500);
   if ($('#sheet').dataset.kind === 'upload' && !U.failed) setTimeout(() => { if (!U.running && $('#sheet').dataset.kind === 'upload') closeSheet(); }, 1200);
   else if ($('#sheet').dataset.kind !== 'upload') cleanupUpload();
+  S.gh.info().then(i => { if (S.space === sp) { S.repoInfo = i; rerender(); } }).catch(() => {});
   runGeocodeJob();
 }
 
@@ -1331,7 +1586,7 @@ const clean = o => { for (const k of Object.keys(o)) { const v = o[k]; if (v == 
 async function preparePhoto(e, opts) {
   const m = e.main, meta = m.meta;
   const id = C.newId();
-  const ym = (meta.takenAt || new Date().toISOString()).slice(0, 7).replace('-', '/');
+  const ym = C.mediaDir(meta.takenAt);
   let r = null;
   try { r = await makeRenditions(m); } catch (err) { if (m.kind === 'photo') throw err; }
   const ext = C.extOf(m.name) || (m.kind === 'video' ? 'mp4' : 'jpg');
@@ -1393,6 +1648,11 @@ async function runGeocodeJob() {
 
 function bind() {
   $('#uploadBtn').onclick = () => $('#fileInput').click();
+  $('#uploadFab').onclick = () => $('#fileInput').click();
+  bindSheetDrag();
+  // scroll-edge hairline under the translucent bar, only once content slides beneath it
+  const onScroll = () => $('.bar').classList.toggle('scrolled', window.scrollY > 4);
+  window.addEventListener('scroll', onScroll, { passive: true });
   $('#fileInput').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
   $('#spaceBtn').onclick = spaceSheet;
   $('#selectBtn').onclick = () => setSelecting(!S.selecting);
@@ -1439,7 +1699,7 @@ function bind() {
         S.selected.has(id) ? S.selected.delete(id) : S.selected.add(id);
         $$(`.tile[data-id="${CSS.escape(id)}"]`).forEach(t => t.classList.toggle('sel', S.selected.has(id)));
         updateSelCount();
-      } else openViewer(id);
+      } else openViewer(id, S.list, tile);
       return;
     }
     const b = e.target.closest('[data-act],[data-album],[data-smart],[data-space],[data-unlink]');
@@ -1473,6 +1733,7 @@ function bind() {
       case 'expand': { const k = b.dataset.key; S.expanded.has(k) ? S.expanded.delete(k) : S.expanded.add(k); return renderPhotos(); }
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
+      case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
       case 'rename': {
         const t = prompt('앨범 이름', S.index.title || '');

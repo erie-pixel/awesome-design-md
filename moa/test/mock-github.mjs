@@ -11,7 +11,8 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
   const trees = new Map();   // sha -> Map(path -> blobSha)
   const commits = new Map(); // sha -> { tree, parents, message }
   let ref = null;            // main branch head
-  const stats = { commits: 0, conflicts: 0, requests: 0 };
+  let sizeKB = 0;            // what GET /repos reports as .git size
+  const stats = { commits: 0, conflicts: 0, requests: 0, pushes: {} }; // pushes: user -> [ms]
 
   const sha = (kind, data) => crypto.createHash('sha1').update(kind + '\0').update(data).digest('hex');
   const putBlob = buf => { const s = sha('blob', buf); blobs.set(s, buf); return s; };
@@ -25,13 +26,26 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
     head: () => ref,
     fileText: (path) => { const t = treeAt('main'); const b = t && t.get(path); return b ? blobs.get(b).toString('utf8') : null; },
     paths: () => [...(treeAt('main')?.keys() || [])].sort(),
-    /** Commit directly as another client would (used to force conflicts). */
-    commitIndex(mutator, message = 'external') {
+    shaOf: path => treeAt('main')?.get(path),
+    setSizeKB: kb => { sizeKB = kb; },
+    /** Most ref updates one user made inside any 60s window. */
+    maxPushesPerMinute(user) {
+      const t = stats.pushes[user] || [];
+      return t.reduce((m, x, i) => Math.max(m, t.filter(y => y >= x && y - x < 60000).length), 0);
+    },
+    /** Commit a JSON file change directly, as another client would (used to force conflicts). */
+    commitJson(path, mutator, message = 'external') {
       const t = new Map(treeAt('main'));
-      const ix = JSON.parse(blobs.get(t.get('index.json')).toString('utf8'));
-      mutator(ix);
-      t.set('index.json', putBlob(Buffer.from(JSON.stringify(ix, null, 2))));
+      const doc = JSON.parse(blobs.get(t.get(path)).toString('utf8'));
+      mutator(doc);
+      t.set(path, putBlob(Buffer.from(JSON.stringify(doc, null, 2))));
       ref = putCommit({ tree: putTree(t), parents: [ref], message });
+    },
+    /** Put a file straight into the tree (seeding legacy layouts). */
+    putFile(path, text, message = 'seed') {
+      const t = new Map(ref ? treeAt('main') : []);
+      t.set(path, putBlob(Buffer.from(text)));
+      ref = putCommit({ tree: putTree(t), parents: ref ? [ref] : [], message });
     },
   };
 
@@ -62,7 +76,7 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
     const write = req.method !== 'GET';
     if (write && !canPush) return send(403, { message: 'Resource not accessible by personal access token' });
 
-    if (p === '' && req.method === 'GET') return send(200, { name: repo, full_name: `${owner}/${repo}`, private: true, default_branch: 'main', description: '', permissions: { admin: user === owner, push: canPush, pull: true } });
+    if (p === '' && req.method === 'GET') return send(200, { name: repo, full_name: `${owner}/${repo}`, private: true, default_branch: 'main', description: '', size: sizeKB, permissions: { admin: user === owner, push: canPush, pull: true } });
     if (p === '/git/ref/heads/main' && req.method === 'GET') {
       if (!ref) return send(409, { message: 'Git Repository is empty.' });
       return send(200, { ref: 'refs/heads/main', object: { sha: ref, type: 'commit' } });
@@ -71,6 +85,25 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
     if ((m = /^\/git\/commits\/(\w+)$/.exec(p)) && req.method === 'GET') {
       const c = commits.get(m[1]);
       return c ? send(200, { sha: m[1], tree: { sha: c.tree }, parents: c.parents.map(s => ({ sha: s })), message: c.message }) : send(404, { message: 'Not Found' });
+    }
+    if ((m = /^\/git\/trees\/(\w+)$/.exec(p)) && req.method === 'GET') {
+      // non-recursive listing; sub-directories become synthetic tree objects
+      const t = trees.get(m[1]);
+      if (!t) return send(404, { message: 'Not Found' });
+      const dirs = new Map(), out = [];
+      for (const [path, b] of t) {
+        const i = path.indexOf('/');
+        if (i < 0) out.push({ path, mode: '100644', type: 'blob', sha: b, size: blobs.get(b).length });
+        else { const d = path.slice(0, i); if (!dirs.has(d)) dirs.set(d, new Map()); dirs.get(d).set(path.slice(i + 1), b); }
+      }
+      for (const [d, sub] of dirs) out.push({ path: d, mode: '040000', type: 'tree', sha: putTree(sub) });
+      return send(200, { sha: m[1], tree: out, truncated: false });
+    }
+    if ((m = /^\/git\/blobs\/(\w+)$/.exec(p)) && req.method === 'GET') {
+      const b = blobs.get(m[1]);
+      if (!b) return send(404, { message: 'Not Found' });
+      if (!/raw/.test(req.headers.accept || '')) return send(200, { sha: m[1], size: b.length, encoding: 'base64', content: b.toString('base64') });
+      return send(200, b);
     }
     if ((m = /^\/contents\/(.+)$/.exec(p))) {
       const path = decodeURIComponent(m[1]);
@@ -86,6 +119,7 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
         const t = new Map(ref ? treeAt('main') : []);
         t.set(path, putBlob(Buffer.from(body.content, 'base64')));
         ref = putCommit({ tree: putTree(t), parents: ref ? [ref] : [], message: body.message });
+        (stats.pushes[user] ||= []).push(Date.now());
         return send(201, { commit: { sha: ref } });
       }
     }
@@ -116,6 +150,7 @@ export function createMockGitHub({ owner = 'alice', repo = 'photos', users = { '
       if (!commits.has(body.sha)) return send(422, { message: 'Object does not exist' });
       if (!body.force && ref && !isAncestor(ref, body.sha)) { stats.conflicts++; return send(422, { message: 'Update is not a fast forward' }); }
       ref = body.sha;
+      (stats.pushes[user] ||= []).push(Date.now());
       return send(200, { ref: 'refs/heads/main', object: { sha: ref } });
     }
     send(404, { message: 'Not Found (mock)' });

@@ -1,16 +1,19 @@
 /* ============================================================
    Moa — GitHub storage layer
    A private repository is the photo library:
-     index.json                   every photo's metadata, albums, tags
-     media/YYYY/MM/<id>.<ext>     originals (+ <id>.live.mov for Live Photos)
-     preview/YYYY/MM/<id>.jpg     ~2048px JPEG for any browser
-     thumb/YYYY/MM/<id>.jpg       grid thumbnail
+     album.json                      title, members, albums
+     index/YYYY-MM.json              photo metadata, one shard per month
+     media/YYYY/MM/DD/<id>.<ext>     originals (+ <id>.live.mov for Live Photos)
+     preview/YYYY/MM/DD/<id>.jpg     ~2048px JPEG for any browser
+     thumb/YYYY/MM/DD/<id>.jpg       grid thumbnail
    Writes go through the Git Data API so one upload batch (files +
-   index) lands as a single commit; a non-fast-forward ref update
-   means a friend committed first, so we re-read and replay.
+   touched index shards) lands as a single commit; a non-fast-forward
+   ref update means a friend committed first, so we re-read and replay.
+   Ref updates are paced to GitHub's 6-pushes-per-minute guidance.
    ============================================================ */
 
-import { INDEX_PATH, parseIndex, serializeIndex, emptyIndex, applyOps, filesOf } from './core.js';
+import { INDEX_PATH, META_PATH, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf } from './core.js';
+import { waitFor } from './limits.js';
 
 const MEDIA_CACHE = 'moa-media-v1';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -51,7 +54,9 @@ export class Repo {
     this.token = token;
     this.branch = branch || null;
     this.api = (api || 'https://api.github.com').replace(/\/+$/, '');
-    this.onWait = null; // (seconds) => void, rate-limit notice
+    this.onWait = null;     // (seconds) => void, API rate-limit notice
+    this.onThrottle = null; // (seconds) => void, push-rate pacing notice
+    this.pushTimes = [];
     this._inflight = 0;
     this._queue = [];
   }
@@ -135,10 +140,64 @@ export class Repo {
     return this.req('GET', `/contents/${encPath(path)}?ref=${encodeURIComponent(ref)}`, { accept: 'application/vnd.github.raw+json', as, allow404: true });
   }
 
-  async index(ref) {
-    const text = await this.file(INDEX_PATH, ref, 'text');
-    return text == null ? null : parseIndex(text);
+  /** Blob text by sha. Blobs are content-addressed, so the cache never goes stale. */
+  async blobText(sha) {
+    const key = `https://moa.cache/blob/${sha}`;
+    let c = null;
+    if ('caches' in globalThis) {
+      try {
+        c = await caches.open(MEDIA_CACHE);
+        const hit = await c.match(key);
+        if (hit) return hit.text();
+      } catch { c = null; }
+    }
+    const text = await this.req('GET', `/git/blobs/${sha}`, { accept: 'application/vnd.github.raw+json', as: 'text', cache: 'force-cache' });
+    if (c) c.put(key, new Response(text)).catch(() => {});
+    return text;
   }
+
+  /**
+   * Album state at a commit: { head, index, files: Map(path → { sha, size, text }) }.
+   * Reads v2 (album.json + index/*.json) or the v1 single index.json.
+   * Unchanged shards come from cache, so a refresh costs ~3 requests.
+   */
+  async state(head) {
+    const tree = await this.treeOf(head);
+    const root = (await this.req('GET', `/git/trees/${tree}`)).tree;
+    const find = n => root.find(e => e.path === n);
+    const meta = find(META_PATH), legacy = find(INDEX_PATH), dir = find(SHARD_DIR);
+    const files = new Map();
+    if (meta) {
+      const shards = dir?.type === 'tree'
+        ? (await this.req('GET', `/git/trees/${dir.sha}`)).tree.filter(e => e.type === 'blob' && e.path.endsWith('.json')).map(e => ({ ...e, path: `${SHARD_DIR}/${e.path}` }))
+        : [];
+      const all = [{ ...meta, path: META_PATH }, ...shards];
+      const texts = await Promise.all(all.map(f => this.blobText(f.sha)));
+      all.forEach((f, i) => files.set(f.path, { sha: f.sha, size: f.size ?? texts[i].length, text: texts[i] }));
+      if (legacy) files.set(INDEX_PATH, { sha: legacy.sha, size: legacy.size, text: null }); // removed on next commit
+      return { head, index: joinIndex(texts[0], texts.slice(1)), files };
+    }
+    if (legacy) {
+      const text = await this.blobText(legacy.sha);
+      files.set(INDEX_PATH, { sha: legacy.sha, size: legacy.size ?? text.length, text });
+      return { head, index: parseIndex(text), files };
+    }
+    return { head, index: null, files };
+  }
+
+  /** Wait until another ref update fits in GitHub's recommended push rate. */
+  async gate() {
+    for (;;) {
+      const ms = waitFor(this.pushTimes, Date.now());
+      if (!ms) break;
+      this.onThrottle?.(Math.ceil(ms / 1000));
+      await sleep(ms + 50);
+    }
+    this.pushTimes.push(Date.now());
+    this.pushTimes = this.pushTimes.filter(t => Date.now() - t < 60000);
+  }
+
+  recentPushes() { return this.pushTimes.filter(t => Date.now() - t < 60000).length; }
 
   async blob(base64) {
     return (await this.req('POST', '/git/blobs', { body: { content: base64, encoding: 'base64' } })).sha;
@@ -146,37 +205,46 @@ export class Repo {
 
   /** First commit into an empty repository (Git Data API refuses empty repos). */
   async seed(path, text, message) {
+    await this.gate();
     await this.req('PUT', `/contents/${encPath(path)}`, { body: { message, content: textToBase64(text) } });
   }
 
   /**
    * One atomic commit: new blobs + ops replayed on the freshest index.
    * files: [{ path, sha }] — already-created blobs.
-   * base: { head, index } the caller already has (skips a read when still current).
+   * base: a state() result the caller already has (skips reads while still current).
+   * Only shards whose text changed get new blobs; v1 index.json migrates here.
    */
   async commit({ files = [], ops = [], message, base, title }) {
     for (let attempt = 0; attempt < 8; attempt++) {
       const head = await this.head();
       if (!head) throw new GitHubError(409, 'empty', { empty: true });
-      const [tree, fresh] = await Promise.all([
+      const [tree, st] = await Promise.all([
         this.treeOf(head),
-        base && base.head === head && base.index ? structuredClone(base.index) : this.index(head),
+        base && base.head === head && base.files ? base : this.state(head),
       ]);
-      const ix = fresh || emptyIndex(title);
+      const ix = st.index ? structuredClone(st.index) : emptyIndex(title);
       const deletes = [];
       for (const op of ops) if (op.op === 'deletePhotos') for (const id of op.ids) if (ix.photos[id]) deletes.push(...filesOf(ix.photos[id]));
       applyOps(ix, ops);
-      const indexSha = await this.blob(textToBase64(serializeIndex(ix)));
+      const next = splitIndex(ix);
+      const changed = [...next].filter(([path, text]) => st.files.get(path)?.text !== text);
+      const shas = await Promise.all(changed.map(([, text]) => this.blob(textToBase64(text))));
+      const nextFiles = new Map();
+      for (const [path, text] of next) nextFiles.set(path, { ...st.files.get(path), text, size: new TextEncoder().encode(text).length });
+      changed.forEach(([path], i) => { nextFiles.get(path).sha = shas[i]; });
+      const removed = [...st.files.keys()].filter(path => !next.has(path));
       const entries = [
         ...files.map(f => ({ path: f.path, mode: '100644', type: 'blob', sha: f.sha })),
-        { path: INDEX_PATH, mode: '100644', type: 'blob', sha: indexSha },
-        ...[...new Set(deletes)].map(path => ({ path, mode: '100644', type: 'blob', sha: null })),
+        ...changed.map(([path], i) => ({ path, mode: '100644', type: 'blob', sha: shas[i] })),
+        ...[...new Set([...deletes, ...removed])].map(path => ({ path, mode: '100644', type: 'blob', sha: null })),
       ];
       const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
       const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
+      await this.gate();
       try {
         await this.req('PATCH', `/git/refs/heads/${encodeURIComponent(this.branch)}`, { body: { sha: c.sha, force: false } });
-        return { head: c.sha, index: ix };
+        return { head: c.sha, index: ix, files: nextFiles };
       } catch (e) {
         if (e.status !== 422 && e.status !== 409) throw e;
         await sleep(300 + Math.random() * 700 * (attempt + 1)); // someone else committed first

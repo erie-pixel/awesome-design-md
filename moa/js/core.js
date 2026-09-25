@@ -5,8 +5,10 @@
    and Live Photo pairing. Shared by the app and the Node tests.
    ============================================================ */
 
-export const INDEX_PATH = 'index.json';
-export const INDEX_VERSION = 1;
+export const INDEX_PATH = 'index.json';   // v1: everything in one file (read + migrated)
+export const META_PATH = 'album.json';    // v2: title, members, albums
+export const SHARD_DIR = 'index';         // v2: index/YYYY-MM.json, photos by capture month
+export const INDEX_VERSION = 2;
 
 // ---------------- ids & small helpers ----------------
 
@@ -47,15 +49,58 @@ export function emptyIndex(title = '우리 앨범') {
   return { app: 'moa', version: INDEX_VERSION, title, createdAt: new Date().toISOString(), members: {}, albums: {}, photos: {} };
 }
 
+function photosBody(photos) {
+  const keys = Object.keys(photos).sort();
+  return keys.length
+    ? '{\n' + keys.map(k => `    ${JSON.stringify(k)}: ${JSON.stringify(photos[k])}`).join(',\n') + '\n  }'
+    : '{}';
+}
+
 /** Readable, diff-friendly JSON: one photo per line. */
 export function serializeIndex(ix) {
   const { photos = {}, ...rest } = ix;
   const head = JSON.stringify(rest, null, 2);
-  const keys = Object.keys(photos).sort();
-  const body = keys.length
-    ? '{\n' + keys.map(k => `    ${JSON.stringify(k)}: ${JSON.stringify(photos[k])}`).join(',\n') + '\n  }'
-    : '{}';
-  return head.slice(0, -2) + `,\n  "photos": ${body}\n}\n`;
+  return head.slice(0, -2) + `,\n  "photos": ${photosBody(photos)}\n}\n`;
+}
+
+/**
+ * GitHub recommends single objects stay under 1 MB. One big index.json
+ * crosses that at ~2,000 photos and is rewritten on every like, so v2
+ * splits it: album.json for the small shared state plus one shard per
+ * capture month. A commit only rewrites the shards it touched.
+ */
+export function shardOf(p) {
+  const m = /^(\d{4})-(\d{2})/.exec(p.takenAt || p.uploadedAt || '');
+  return `${SHARD_DIR}/${m ? `${m[1]}-${m[2]}` : 'undated'}.json`;
+}
+
+export function splitIndex(ix) {
+  const { photos = {}, ...meta } = ix;
+  const files = new Map([[META_PATH, JSON.stringify({ ...meta, version: INDEX_VERSION }, null, 2) + '\n']]);
+  const shards = new Map();
+  for (const [id, p] of Object.entries(photos)) {
+    const k = shardOf(p);
+    if (!shards.has(k)) shards.set(k, {});
+    shards.get(k)[id] = p;
+  }
+  for (const k of [...shards.keys()].sort()) files.set(k, `{\n  "photos": ${photosBody(shards.get(k))}\n}\n`);
+  return files;
+}
+
+export function joinIndex(metaText, shardTexts = []) {
+  const meta = JSON.parse(metaText);
+  if (!meta || meta.app !== 'moa') throw new Error('Moa 앨범 album.json이 아닙니다');
+  const ix = { ...meta, members: meta.members || {}, albums: meta.albums || {}, photos: {} };
+  for (const t of shardTexts) Object.assign(ix.photos, JSON.parse(t).photos || {});
+  return ix;
+}
+
+/** media/YYYY/MM/DD — day folders keep every directory far below GitHub's 3,000-entry guidance. */
+export function mediaDir(takenAt) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(takenAt || '');
+  if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+  const d = new Date();
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
 
 export function parseIndex(text) {

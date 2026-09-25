@@ -340,8 +340,9 @@ test('crypto: passphrase unlocks the album key; wrong passphrase and tampering a
   // same plaintext never encrypts the same way twice (fresh IV)
   const twice = await K.seal(key, new TextEncoder().encode('{"photos":{}}'));
   assert.notDeepEqual([...twice], [...sealed]);
-  // non-extractable: the raw key can't be read back out of the page
-  await assert.rejects(globalThis.crypto.subtle.exportKey('raw', again));
+  // an invite link can carry the key
+  const viaLink = await K.keyFromText(await K.keyToText(again));
+  assert.equal(new TextDecoder().decode(await K.open(viaLink, sealed)), '{"photos":{}}');
 });
 
 test('crypto: a new passphrase rewraps the same key (old files stay readable)', async () => {
@@ -379,4 +380,24 @@ test('removedFiles: files of photos a newer index no longer has', () => {
   const after = { photos: { b: before.photos.b } };
   assert.deepEqual(C.removedFiles(before, after).sort(), ['o/a', 't/a']);
   assert.deepEqual(C.removedFiles(null, after), []);
+});
+
+test('crypto: recovery code opens the album when the passphrase is lost; a device can set a new one', async () => {
+  const { header, key } = await K.createAlbumKey('forgotten passphrase', { iterations: 1000 });
+  const code = K.newRecoveryCode();
+  assert.match(code, /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){5}$/);
+  const h = await K.withRecovery(header, key, code);
+  assert.ok(K.hasRecovery(h) && !K.hasRecovery(header));
+  const file = await K.seal(key, new Uint8Array([7, 8, 9]));
+  // typed sloppily: lower case, spaces, O for 0, l for 1
+  const sloppy = code.toLowerCase().replace(/-/g, ' ').replace(/0/g, 'o').replace(/1/g, 'l');
+  const k1 = await K.unlockWithRecovery(h, sloppy);
+  assert.deepEqual([...await K.open(k1, file)], [7, 8, 9]);
+  await assert.rejects(K.unlockWithRecovery(h, K.newRecoveryCode()), K.BadPassphrase);
+  await assert.rejects(K.unlockWithRecovery(header, code), K.BadPassphrase);
+  // after recovery: a new passphrase, recovery code still valid
+  const h2 = await K.setPassphrase(h, k1, 'brand new passphrase');
+  await assert.rejects(K.unlockAlbumKey(h2, 'forgotten passphrase'), K.BadPassphrase);
+  assert.deepEqual([...await K.open(await K.unlockAlbumKey(h2, 'brand new passphrase'), file)], [7, 8, 9]);
+  assert.deepEqual([...await K.open(await K.unlockWithRecovery(h2, code), file)], [7, 8, 9]);
 });

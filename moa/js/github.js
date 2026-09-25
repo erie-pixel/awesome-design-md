@@ -313,6 +313,66 @@ export class Repo {
     throw new GitHubError(409, t('gh.conflict'));
   }
 
+  /** Photo/video blob stored for a target mode: sealed with `key`, or as-is when key is null. */
+  async putMediaWith(blob, key) {
+    const body = key ? new Blob(await sealParts(key, new Uint8Array(await blob.arrayBuffer()))) : blob;
+    return this.blob(await blobToBase64(body));
+  }
+
+  /**
+   * Switch the album between plain and encrypted in one commit.
+   * map: old path → { path, sha } of the file already stored in the target form (null: file was missing).
+   * target: { header, key } to encrypt, null to decrypt.
+   * Returns { missing, st } without committing when the album gained files the map
+   * doesn't cover yet (a friend uploaded meanwhile), else { state } in the new mode.
+   */
+  async convertCommit({ map, target, readme, message }) {
+    const sealed = !!target;
+    const put = async text => { const b = new TextEncoder().encode(text); return this.blob(bytesToBase64(sealed ? await seal(target.key, b) : b)); };
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const head = await this.head();
+      const [tree, st] = await Promise.all([this.treeOf(head), this.state(head)]);
+      const ix = structuredClone(st.index);
+      const oldPaths = Object.values(ix.photos).flatMap(filesOf);
+      if (oldPaths.some(p => !(p in map))) return { missing: true, st };
+      const entries = [];
+      for (const p of Object.values(ix.photos)) {
+        for (const k of Object.keys(p.files || {})) {
+          if (k.endsWith('Mime')) continue;
+          const m = map[p.files[k]];
+          if (m) { p.files[k] = m.path; entries.push({ path: m.path, mode: '100644', type: 'blob', sha: m.sha }); } else delete p.files[k];
+        }
+      }
+      const next = splitIndex(ix, { sealed });
+      const shas = await Promise.all([...next.values()].map(put));
+      const nextFiles = new Map();
+      [...next].forEach(([path, text], i) => {
+        entries.push({ path, mode: '100644', type: 'blob', sha: shas[i] });
+        nextFiles.set(path, { sha: shas[i], text, size: new TextEncoder().encode(text).length + (sealed ? 32 : 0) });
+      });
+      if (sealed) entries.push({ path: META_PATH, mode: '100644', type: 'blob', sha: await this.blob(textToBase64(JSON.stringify(target.header, null, 2) + '\n')) });
+      if (readme) entries.push({ path: 'README.md', mode: '100644', type: 'blob', sha: await this.blob(textToBase64(readme)) });
+      const written = new Set(entries.map(e => e.path));
+      const gone = [...new Set([...oldPaths.filter(p => map[p]), ...st.files.keys()])].filter(p => !written.has(p));
+      entries.push(...gone.map(path => ({ path, mode: '100644', type: 'blob', sha: null })));
+      const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
+      const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
+      await this.gate();
+      try {
+        await this.req('PATCH', `/git/refs/heads/${encodeURIComponent(this.branch)}`, { body: { sha: c.sha, force: false } });
+      } catch (e) {
+        if (e.status !== 422 && e.status !== 409) throw e;
+        await sleep(300 + Math.random() * 700 * (attempt + 1));
+        continue;
+      }
+      this.setEncryption(target?.header || null, target?.key || null);
+      return { state: { head: c.sha, index: ix, files: nextFiles, root: false } };
+    }
+    throw new GitHubError(409, t('gh.conflict'));
+  }
+
+  setDescription(description) { return this.req('PATCH', '', { body: { description } }); }
+
   /**
    * Erase history: the branch becomes one commit holding today's files,
    * so photos deleted earlier are reachable from no commit and GitHub
@@ -427,6 +487,45 @@ export class Account {
 
   invitations() { return this.req('GET', '/user/repository_invitations?per_page=100'); }
   accept(id) { return this.req('PATCH', `/user/repository_invitations/${id}`); }
+  /** A repository this user can open, or null. */
+  repo(owner, name) { return this.req('GET', `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, { allow404: true }); }
+
+  // ---------- invite links ----------
+  // Each invite is a secret gist (unlisted, readable by whoever has its id).
+  // A friend asks to join by commenting on it — GitHub vouches for who wrote
+  // the comment — and the owner's app turns that into a collaborator invite.
+
+  async createInvite(meta) {
+    const g = await this.req('POST', '/gists', { body: { description: inviteDescription({ ...meta, seen: 0 }), public: false, files: { [INVITE_FILE]: { content: JSON.stringify({ kind: 'moa-invite', v: 1, ...meta }, null, 2) } } } });
+    return { id: g.id, ...meta, seen: 0, comments: 0 };
+  }
+
+  /** My open invites, parsed from the gist descriptions (no extra requests). */
+  async invites() {
+    const list = await this.req('GET', '/gists?per_page=100');
+    return list.map(g => { const m = parseInviteDescription(g.description); return m && { id: g.id, ...m, comments: g.comments || 0 }; }).filter(Boolean);
+  }
+
+  /** An invite as its recipient sees it; null once used or revoked. */
+  async readInvite(id) {
+    const g = await this.req('GET', `/gists/${encodeURIComponent(id)}`, { allow404: true });
+    if (!g) return null;
+    try { const m = JSON.parse(g.files?.[INVITE_FILE]?.content || ''); return m.kind === 'moa-invite' ? { ...m, id, owner: g.owner?.login } : null; } catch { return null; }
+  }
+
+  inviteComments(id) { return this.req('GET', `/gists/${encodeURIComponent(id)}/comments?per_page=100`); }
+  requestJoin(id) { return this.req('POST', `/gists/${encodeURIComponent(id)}/comments`, { body: { body: JOIN_REQUEST } }); }
+  markInvite(inv, seen) { return this.req('PATCH', `/gists/${encodeURIComponent(inv.id)}`, { body: { description: inviteDescription({ ...inv, seen }) } }); }
+  revokeInvite(id) { return this.req('DELETE', `/gists/${encodeURIComponent(id)}`, { allow404: true }); }
+}
+
+const INVITE_FILE = 'moa-invite.json';
+export const JOIN_REQUEST = 'moa-join';
+// "Moa invite <owner/repo> <expires ISO> <uses: 1 | 0=until expiry> <comments already handled>"
+const inviteDescription = m => `Moa invite ${m.repo} ${m.expires} ${m.uses} ${m.seen || 0}`;
+function parseInviteDescription(d) {
+  const m = /^Moa invite (\S+\/\S+) (\S+) (\d+) (\d+)$/.exec(d || '');
+  return m && { repo: m[1], expires: m[2], uses: +m[3], seen: +m[4] };
 }
 
 export async function clearMediaCache() {

@@ -13,6 +13,8 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
   const trees = new Map();   // sha -> Map(path -> blobSha)
   const commits = new Map(); // sha -> { tree, parents, message }
   const R = new Map();       // "owner/name" (lowercase) -> repo state
+  const gists = new Map();   // id -> { id, owner, description, files, comments: [] }
+  let nextComment = 1;
   const logins = new Set([...Object.values(users), ...extraLogins]);
   let nextInvite = 1;
   const stats = { commits: 0, conflicts: 0, requests: 0, pushes: {} }; // pushes: "user owner/repo" -> [ms]
@@ -71,7 +73,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
   };
 
   const api = {
-    stats, at,
+    stats, at, gists,
     repos: () => [...R.values()].map(r => `${r.owner}/${r.name}`),
     /** Most ref updates one user made to one repository inside any 60s window (GitHub's guidance is per repository). */
     maxPushesPerMinute(user) {
@@ -124,6 +126,29 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       return send(404, { message: 'Not Found' });
     }
 
+    // ---------- gists (secret: readable and commentable by anyone with the id) ----------
+    const gistJson = (g, full) => ({ id: g.id, description: g.description, public: false, owner: { login: g.owner }, comments: g.comments.length,
+      files: Object.fromEntries(Object.entries(g.files).map(([n, f]) => [n, full ? { filename: n, content: f.content } : { filename: n }])) });
+    if (url.pathname === '/gists' && req.method === 'POST') {
+      const id = crypto.randomBytes(16).toString('hex');
+      const g = { id, owner: user, description: body.description || '', files: body.files || {}, comments: [] };
+      gists.set(id, g);
+      return send(201, gistJson(g, true));
+    }
+    if (url.pathname === '/gists' && req.method === 'GET') return send(200, [...gists.values()].filter(g => g.owner === user).map(g => gistJson(g, false)));
+    if ((m = /^\/gists\/(\w+)(\/comments)?$/.exec(url.pathname))) {
+      const g = gists.get(m[1]);
+      if (!g) return send(404, { message: 'Not Found' });
+      if (m[2]) {
+        if (req.method === 'GET') return send(200, g.comments);
+        if (req.method === 'POST') { const c = { id: nextComment++, body: body.body, user: { login: user } }; g.comments.push(c); return send(201, c); }
+      }
+      if (req.method === 'GET') return send(200, gistJson(g, true));
+      if (g.owner !== user) return send(404, { message: 'Not Found' });
+      if (req.method === 'PATCH') { if (body.description != null) g.description = body.description; return send(200, gistJson(g, true)); }
+      if (req.method === 'DELETE') { gists.delete(g.id); return send(204); }
+    }
+
     // ---------- repository ----------
     if (!(m = /^\/repos\/([^/]+)\/([^/]+)(.*)$/.exec(url.pathname))) return send(404, { message: 'Not Found (mock)' });
     const repo = R.get(`${m[1]}/${m[2]}`.toLowerCase());
@@ -134,6 +159,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
     if (req.method !== 'GET' && !canPush) return send(403, { message: 'Resource not accessible' });
 
     if (p === '' && req.method === 'GET') return send(200, repoJson(repo, user));
+    if (p === '' && req.method === 'PATCH') { if (!isAdmin) return send(403, { message: 'Must have admin rights' }); if (body.description != null) repo.description = body.description; return send(200, repoJson(repo, user)); }
     if (p === '/topics' && req.method === 'PUT') { if (!isAdmin) return send(403, { message: 'Must have admin rights' }); repo.topics = body.names; return send(200, { names: repo.topics }); }
     if (p.startsWith('/collaborators')) {
       if (req.method === 'GET') return send(200, [...repo.collaborators].map(([login, pm]) => ({ login, avatar_url: '', permissions: { admin: pm === 'admin', push: pm !== 'pull', pull: true } })));

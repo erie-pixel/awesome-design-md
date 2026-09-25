@@ -14,7 +14,8 @@
 const STATE_COOKIE = 'moa_oauth';
 // repo: create the album's private repository, read/write it, invite
 // and accept collaborators. GitHub OAuth has no narrower scope for that.
-const SCOPE = 'repo';
+// gist: invite links — each invite is a secret gist friends comment on.
+const SCOPE = 'repo gist';
 
 export function settings(env) {
   return {

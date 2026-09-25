@@ -8,7 +8,7 @@
 
 import * as C from './core.js';
 import { Repo, Account, clearMediaCache, textToBase64, ENCRYPTED_DESCRIPTION } from './github.js';
-import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys } from './crypto.js';
+import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecoveryCode, withRecovery, hasRecovery, unlockWithRecovery, keyToText, keyFromText, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys } from './crypto.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
@@ -31,7 +31,7 @@ const ICON = {
 
 // ---------------- persistence ----------------
 
-const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id };
+const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite' };
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
@@ -205,7 +205,9 @@ function observeThumbs(root) {
 
 function parseHash() {
   const h = new URLSearchParams(location.hash.replace(/^#/, ''));
-  const out = { auth: h.get('auth'), authError: h.get('auth_error'), join: null };
+  const out = { auth: h.get('auth'), scope: h.get('scope'), authError: h.get('auth_error'), join: null, invite: null };
+  const inv = parseInviteCode(h.get('invite') || '');
+  if (inv) out.invite = { id: inv, k: h.get('k') || null };
   const j = h.get('join');
   if (j) {
     const [owner, repo] = j.split('/');
@@ -213,6 +215,16 @@ function parseHash() {
   }
   return out;
 }
+
+/** Invite code = the invite's gist id; accepts the code (any grouping) or a whole invite link. */
+function parseInviteCode(s) {
+  let v = String(s || '').trim();
+  const m = /[#&]invite=([^&\s]+)/.exec(v);
+  if (m) v = m[1];
+  v = v.replace(/[\s-]/g, '').toLowerCase();
+  return /^[0-9a-f]{20,40}$/.test(v) ? v : null;
+}
+const fmtCode = id => id.match(/.{1,4}/g).join('-');
 
 function parseRepo(s) {
   const t = String(s || '').trim().replace(/\.git$/, '').replace(/^https?:\/\/[^/]+\//, '');
@@ -254,9 +266,10 @@ async function boot() {
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   await loadAuthConfig();
   if (h.auth) {
-    S.auth = { token: h.auth };
+    S.auth = { token: h.auth, scope: h.scope || '' };
     save(LS.auth, S.auth);
   }
+  if (h.invite) save(LS.invite, { ...h.invite, at: Date.now() }); // survives the sign-in round trip
   let join = h.join;
   try { join ||= JSON.parse(sessionStorage.getItem('moa.join') || 'null'); sessionStorage.removeItem('moa.join'); } catch { /* private mode */ }
   if (h.authError) toast(h.authError === 'access_denied' ? t('auth.cancelled') : t('auth.failed', { e: h.authError }), 4000);
@@ -270,6 +283,11 @@ async function boot() {
       if (e.status === 401) { signedOut(t('auth.expired')); return; }
     }
   }
+  if (load(LS.invite, null)) {
+    if (S.auth) { processInvites(); return showHome(); }
+    return showWelcome({ invite: true });
+  }
+  if (S.auth) processInvites();
   if (join) {
     const known = S.spaces.find(sp => sameRepo(sp, join) && tokenFor(sp));
     if (known) return openSpace(known);
@@ -281,6 +299,17 @@ async function boot() {
   if (S.auth) return showHome();
   showWelcome();
 }
+
+// an invite link opened in a tab where Moa is already running only changes the #fragment
+window.addEventListener('hashchange', () => {
+  const h = parseHash();
+  if (!h.invite) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  save(LS.invite, { ...h.invite, at: Date.now() });
+  if (!$('#viewer').hidden) closeViewer(true);
+  closeSheet();
+  if (S.auth) showHome(); else showWelcome({ invite: true });
+});
 
 function signedOut(msg) {
   S.auth = null;
@@ -298,6 +327,7 @@ async function logout() {
   saveSpaces();
   S.space = null; S.gh = null; S.index = null;
   S.keys.clear();
+  localStorage.removeItem(LS.invite);
   await Promise.all([clearMediaCache().catch(() => {}), forgetAllKeys()]);
   urls.clear(); resolved.clear();
   signedOut(t('auth.signedOut'));
@@ -306,7 +336,7 @@ async function logout() {
 const MOSAIC = ['#ff9f0a', '#ff375f', '#bf5af2', '#0a84ff', '#30d158', '#ffd60a', '#64d2ff', '#ff6961', '#5e5ce6', '#ffb340', '#34c759', '#ff2d55', '#af52de', '#007aff', '#ffcc00', '#5ac8fa'];
 const GITHUB_MARK = '<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
 
-function showWelcome({ join, adding } = {}) {
+function showWelcome({ join, adding, invite } = {}) {
   $('#shell').hidden = true;
   const w = $('#welcome');
   w.hidden = false;
@@ -317,6 +347,7 @@ function showWelcome({ join, adding } = {}) {
     <h1>Moa</h1>
     <p class="lead">${t('welcome.lead')}</p>
     ${join ? `<div class="invite-banner">${t('welcome.invited', { by: join.by ? '@' + esc(join.by) : '', repo: `<b>${esc(join.owner)}/${esc(join.repo)}</b>` })}</div>` : ''}
+    ${invite ? `<div class="invite-banner">${t('join.signin')}</div>` : ''}
     ${login ? `<button class="btn btn-github btn-block" id="loginBtn">${GITHUB_MARK}${t('welcome.signin')}</button>` : ''}
     <details class="guide" id="tokenBox"${login ? '' : ' open'}><summary>${t(login ? 'welcome.tokenAdvanced' : 'welcome.connect')}</summary>
     <form id="connectForm" autocomplete="off" style="padding:4px 16px 16px">
@@ -381,10 +412,13 @@ async function showHome({ join } = {}) {
     <div id="homeInvites"></div>
     <div class="panel home-list" id="homeAlbums"><div class="row"><div class="grow"><small>${t('sync.loading')}</small></div></div></div>
     <button class="btn btn-primary btn-block" id="newRepoBtn">${t('home.new')}</button>
+    <button class="btn btn-quiet btn-block" id="codeBtn" style="margin-top:10px">${t('join.enterCode')}</button>
     ${S.space ? `<button class="btn btn-quiet btn-block" id="homeBack" style="margin-top:12px">${t('common.back')}</button>` : ''}
   </div>`;
   $('#logoutBtn').onclick = logout;
   $('#newRepoBtn').onclick = newAlbumRepo;
+  $('#codeBtn').onclick = codeSheet;
+  renderJoinCard();
   $('#homeBack')?.addEventListener('click', () => { w.hidden = true; $('#shell').hidden = false; });
   let albums = [], invites = [];
   try {
@@ -395,6 +429,7 @@ async function showHome({ join } = {}) {
     return;
   }
   if ($('#welcome').hidden || !$('#homeAlbums')) return;
+  if (load(LS.invite, null)) joinTick();
   const tokenSpaces = S.spaces.filter(x => x.token && !albums.some(r => sameRepo(x, { owner: r.owner.login, repo: r.name })));
   const inviteFor = j => invites.find(i => sameRepo({ owner: i.repository.owner.login, repo: i.repository.name }, j));
   if (join) {
@@ -720,9 +755,13 @@ function renderInit(empty) {
       try {
         if (empty) await S.gh.seed('README.md', repoReadme(enc.pass ? null : title), 'Moa: start album');
         const files = [];
+        let recovery = null;
         if (enc.pass && !S.gh.sealed) {
           // album.json carries only the wrapped key; everything else is sealed from the first commit on
-          const { header, key } = await createAlbumKey(enc.pass);
+          const made = await createAlbumKey(enc.pass);
+          const key = made.key;
+          recovery = newRecoveryCode();
+          const header = await withRecovery(made.header, key, recovery);
           files.push({ path: C.META_PATH, sha: await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n')) });
           S.gh.setEncryption(header, key);
           S.keys.set(S.space.id, key);
@@ -732,6 +771,7 @@ function renderInit(empty) {
         $('#toolbar').hidden = false;
         adopt(r);
         toast(t('init.done'));
+        if (recovery) recoverySheet(recovery);
       } catch (e) {
         btn.disabled = false; btn.textContent = t('init.create');
         toast(errMsg(e), 4000);
@@ -1073,8 +1113,11 @@ function renderSettings() {
       <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? `⚠️ ${t('home.public')}` : t('set.private')} · ${esc(S.gh.branch)}${S.canWrite ? '' : ` · ${t('set.readonly')}`}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
       ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : ''}
       ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
-      ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>` : ''}
+      ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>
+      <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.title')}</b><small>${t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet')}</small></span><span class="val">›</span></button>` : ''}
       <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
+      ${isOwner() && !S.gh.sealed ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(load(LS.convert(S.space.id), null)?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : ''}
+      ${isOwner() && S.gh.sealed ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(load(LS.convert(S.space.id), null)?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}
       ${S.canWrite ? `<button class="row row-btn" data-act="purge"><span class="grow"><b style="color:var(--danger)">${t('purge.title')}</b></span><span class="val">›</span></button>` : ''}
     </div>
     <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
@@ -1114,9 +1157,13 @@ function inviteSheet() {
     <button class="btn btn-primary btn-block" id="invSend">${t('invite.send')}</button>
     <h2 style="font-size:17px;margin:22px 0 6px">${t('set.people')}</h2>
     <div id="invList"><p class="note" style="margin:0;padding:0">${t('sync.loading')}</p></div>
+    ${S.auth && isOwner() ? `<h2 style="font-size:17px;margin:22px 0 10px">${t('inv.byLink')}</h2>
+    ${S.gh.sealed ? `<div class="row opt-row"><div class="grow"><b>${ICON.lock}${t('inv.withKey')}</b></div><label class="switch"><input type="checkbox" id="invKey" checked><span></span></label></div>` : ''}
+    <div class="actions" style="margin-top:0"><button class="btn btn-quiet" id="invOnce">${t('inv.once')}</button><button class="btn btn-quiet" id="invWeek">${t('inv.week')}</button></div>
+    <div id="invShow"></div><div id="invActive"></div>` : ''}
     <details class="guide" style="margin-top:16px"><summary>${t('invite.link')}</summary><div style="padding:0 16px 14px">
       <input readonly value="${esc(link)}" id="inviteLink" class="link-field">
-      <div class="actions" style="margin-top:10px"><button class="btn btn-quiet" id="copyLink">${t('invite.copy')}</button>${navigator.share ? `<button class="btn btn-quiet" id="shareLink">${t('invite.share')}</button>` : ''}</div></div></details>`);
+      <div class="actions" style="margin-top:10px"><button class="btn btn-quiet" id="copyLink">${t('invite.copy')}</button>${navigator.share ? `<button class="btn btn-quiet" id="shareLink">${t('invite.share')}</button>` : ''}</div></div></details>`, { onClose: () => { clearInterval(invPoll); invPoll = null; } });
   const list = async () => {
     const [col, inv] = await Promise.allSettled([S.gh.collaborators(), S.gh.pendingInvites()]);
     const people = col.status === 'fulfilled' ? col.value : [];
@@ -1155,7 +1202,202 @@ function inviteSheet() {
     toast(t('invite.copied'));
   };
   $('#shareLink', sh)?.addEventListener('click', () => navigator.share({ title: 'Moa', text: S.index.title, url: link }).catch(() => {}));
+  if (!$('#invOnce', sh)) return;
+  const make = async uses => {
+    const btns = [$('#invOnce', sh), $('#invWeek', sh)];
+    btns.forEach(b => { b.disabled = true; });
+    try {
+      const expires = new Date(Date.now() + (uses === 1 ? 1 : 7) * 864e5).toISOString();
+      const sealed = S.gh.sealed;
+      const meta = { repo: `${S.space.owner}/${S.space.repo}`, by: S.auth.login, expires, uses, ...(sealed ? { encrypted: true } : { title: S.index.title }) };
+      const inv = await account().createInvite(meta);
+      const k = sealed && $('#invKey', sh)?.checked ? await keyToText(S.gh.key) : null;
+      showInvite(sh, inv, k);
+      listInvites(sh);
+      clearInterval(invPoll);
+      invPoll = setInterval(() => processInvites().then(n => { if (n) { list(); listInvites(sh); } }), 3000);
+    } catch (e) {
+      if (e.status === 403 || e.status === 404) $('#invShow', sh).innerHTML = `<div class="invite-banner">${t('inv.needScope')} <button class="text-btn" id="invRelogin">${t('inv.relogin')}</button></div>`;
+      else toast(errMsg(e), 4000);
+      $('#invRelogin', sh)?.addEventListener('click', () => { location.href = 'api/auth/login'; });
+    } finally { btns.forEach(b => { b.disabled = false; }); }
+  };
+  $('#invOnce', sh).onclick = () => make(1);
+  $('#invWeek', sh).onclick = () => make(0);
+  listInvites(sh);
+  sh.addEventListener('click', async e => {
+    const r = e.target.closest('[data-revoke]');
+    if (!r) return;
+    r.disabled = true;
+    await account().revokeInvite(r.dataset.revoke).catch(() => {});
+    if ($('#invShow', sh).dataset.id === r.dataset.revoke) $('#invShow', sh).innerHTML = '';
+    listInvites(sh);
+  });
 }
+
+// ---------------- invite links & codes ----------------
+
+let invPoll = null;
+
+/** QR as SVG from the vendored encoder (vendor/qrcode, MIT). */
+function qrSVG(text) {
+  if (!window.qrcode) return '';
+  const q = window.qrcode(0, 'M');
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount(), pad = 4;
+  let d = '';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + pad} ${r + pad}h1v1h-1z`;
+  return `<svg class="qr" viewBox="0 0 ${n + pad * 2} ${n + pad * 2}" shape-rendering="crispEdges" role="img" aria-label="QR"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
+
+function inviteLink(id, k) {
+  return `${location.origin}${location.pathname.replace(/index\.html$/, '')}#invite=${id}${k ? '&k=' + k : ''}`;
+}
+
+function showInvite(sh, inv, k) {
+  const link = inviteLink(inv.id, k);
+  const box = $('#invShow', sh);
+  box.dataset.id = inv.id;
+  box.innerHTML = `<div class="invite-card">${qrSVG(link)}
+    <div class="code-box small" id="invCode">${esc(fmtCode(inv.id))}</div>
+    <small>${t(inv.uses === 1 ? 'inv.onceNote' : 'inv.weekNote', { d: fmtDate(inv.expires) })}</small>
+    <input readonly class="link-field" id="invLink" value="${esc(link)}">
+    <div class="actions"><button class="btn btn-quiet" id="invCopy">${t('invite.copy')}</button>${navigator.share ? `<button class="btn btn-quiet" id="invShare">${t('invite.share')}</button>` : ''}</div></div>`;
+  $('#invCopy', box).onclick = async () => { try { await navigator.clipboard.writeText(link); } catch { $('#invLink', box).select(); document.execCommand('copy'); } toast(t('invite.copied')); };
+  $('#invShare', box)?.addEventListener('click', () => navigator.share({ title: 'Moa', url: link }).catch(() => {}));
+}
+
+async function listInvites(sh) {
+  const box = $('#invActive', sh);
+  if (!box) return;
+  let list = [];
+  try { list = (await account().invites()).filter(i => i.repo.toLowerCase() === `${S.space.owner}/${S.space.repo}`.toLowerCase() && Date.parse(i.expires) > Date.now()); } catch { /* no gist scope yet */ }
+  if (!$('#invActive', sh)) return;
+  box.innerHTML = list.length ? `<div class="panel" style="margin:12px 0 0">${list.map(i => `<div class="row"><div class="grow"><b>${esc(fmtCode(i.id).slice(0, 9))}…</b><small>${t(i.uses === 1 ? 'inv.once' : 'inv.week')} · ${t('inv.until', { d: fmtDate(i.expires) })}</small></div><button class="text-btn danger" data-revoke="${esc(i.id)}">${t('inv.revoke')}</button></div>`).join('')}</div>` : '';
+}
+
+/**
+ * Owner side: turn join requests on my invites into GitHub collaborator
+ * invitations. Runs while the app is open; returns how many people were let in.
+ */
+let invBusy = false;
+async function processInvites() {
+  if (!S.auth || invBusy || document.hidden) return 0;
+  invBusy = true;
+  let admitted = 0;
+  try {
+    const acc = account();
+    for (const inv of await acc.invites()) {
+      if (Date.parse(inv.expires) < Date.now()) { await acc.revokeInvite(inv.id).catch(() => {}); continue; }
+      if (inv.comments <= inv.seen) continue;
+      const comments = await acc.inviteComments(inv.id);
+      const [owner, repo] = inv.repo.split('/');
+      const gh = new Repo({ owner, repo, token: S.auth.token, api: S.authApi });
+      let spent = false;
+      for (const c of comments.slice(inv.seen)) {
+        const who = c.user?.login;
+        if (!who || who === S.auth.login || String(c.body || '').trim() !== 'moa-join') continue;
+        try { await gh.invite(who); admitted++; toast(t('inv.letIn', { u: '@' + who })); } catch (e) { console.warn('invite', who, e); }
+        if (inv.uses === 1) { spent = true; break; }
+      }
+      if (spent) await acc.revokeInvite(inv.id); // one-time: the code stops working
+      else await acc.markInvite(inv, comments.length);
+    }
+  } catch { /* offline, or signed in before invite links existed (no gist scope) */ }
+  finally { invBusy = false; }
+  return admitted;
+}
+setInterval(() => { if (S.auth) processInvites(); }, 30000);
+
+function codeSheet() {
+  const sh = openSheet(`<h2>${t('join.enterCode')}</h2>
+    <label class="field"><span>${t('join.code')}</span><input id="joinCode" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="xxxx-xxxx-…"></label>
+    <p class="err" id="joinErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="joinOk">${t('join.next')}</button></div>`);
+  setTimeout(() => $('#joinCode', sh).focus(), 50);
+  const ok = () => {
+    const raw = $('#joinCode', sh).value;
+    const id = parseInviteCode(raw);
+    if (!id) { $('#joinErr', sh).textContent = t('join.badCode'); $('#joinErr', sh).hidden = false; return; }
+    save(LS.invite, { id, k: /[#&]k=([\w-]+)/.exec(raw)?.[1] || null, at: Date.now() });
+    closeSheet();
+    renderJoinCard();
+    joinTick();
+  };
+  $('#joinOk', sh).onclick = ok;
+  $('#joinCode', sh).onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) ok(); };
+}
+
+/** Friend side: the pending invite on the home screen. */
+function renderJoinCard(state) {
+  const box = $('#homeJoin');
+  const inv = load(LS.invite, null);
+  if (!box) return;
+  if (!inv) { box.innerHTML = ''; return; }
+  const st = state || inv.state || 'loading';
+  const name = inv.title ? `<b>${esc(inv.title)}</b>` : `<b>${esc(inv.repo || fmtCode(inv.id).slice(0, 9) + '…')}</b>`;
+  const by = inv.by ? '@' + esc(inv.by) : '';
+  const body = {
+    loading: `<span>${t('sync.loading')}</span>`,
+    ask: `<span>${t('join.ask', { name, by })}</span><div class="actions"><button class="btn btn-quiet" data-join="cancel">${t('common.cancel')}</button><button class="btn btn-primary" data-join="go">${t('join.join')}</button></div>`,
+    waiting: `<span>${t('join.waiting', { name, by })}</span><div class="actions"><button class="btn btn-quiet" data-join="cancel">${t('common.cancel')}</button></div>`,
+    gone: `<span>${t('join.gone')}</span><div class="actions"><button class="btn btn-quiet" data-join="cancel">${t('common.done')}</button></div>`,
+    own: `<span>${t('join.own')}</span><div class="actions"><button class="btn btn-quiet" data-join="cancel">${t('common.done')}</button></div>`,
+    scope: `<span>${t('inv.needScope')}</span><div class="actions"><button class="btn btn-primary" data-join="relogin">${t('inv.relogin')}</button></div>`,
+  }[st];
+  box.innerHTML = `<div class="invite-banner join-card" data-state="${st}">${body}</div>`;
+  box.onclick = e => {
+    const b = e.target.closest('[data-join]');
+    if (!b) return;
+    const cur = load(LS.invite, null);
+    if (b.dataset.join === 'cancel') { localStorage.removeItem(LS.invite); renderJoinCard(); }
+    else if (b.dataset.join === 'relogin') location.href = 'api/auth/login';
+    else if (cur) { cur.accepted = true; save(LS.invite, cur); joinTick(); }
+  };
+}
+
+let joinBusy = false;
+async function joinTick() {
+  const inv = load(LS.invite, null);
+  if (!inv || !S.auth || joinBusy) return;
+  joinBusy = true;
+  const set = (state, extra = {}) => { Object.assign(inv, extra, { state }); save(LS.invite, inv); renderJoinCard(state); };
+  try {
+    const acc = account();
+    if (!inv.repo) {
+      const meta = await acc.readInvite(inv.id);
+      if (!meta || Date.parse(meta.expires) < Date.now()) return set('gone');
+      // who made the gist is vouched for by GitHub; the text inside it is not
+      if (meta.owner === S.auth.login) return set('own');
+      Object.assign(inv, { repo: meta.repo, by: meta.owner, title: meta.title || null });
+    }
+    if (!inv.accepted) return set('ask'); // joining is the friend's choice
+    const [owner, name] = inv.repo.split('/');
+    // already let in? accept the GitHub invitation and open the album
+    const pending = (await acc.invitations().catch(() => [])).find(i => sameRepo({ owner: i.repository.owner.login, repo: i.repository.name }, { owner, repo: name }));
+    if (pending) await acc.accept(pending.id);
+    const r = pending ? pending.repository : await acc.repo(owner, name);
+    if (r) {
+      localStorage.removeItem(LS.invite);
+      const sp = spaceFromRepo(r);
+      if (inv.k) { try { const key = await keyFromText(inv.k); S.keys.set(sp.id, key); await rememberKey(sp.id, key); } catch { /* bad key in link: ask for the passphrase */ } }
+      toast(t('home.joined', { name: sp.title || r.name }));
+      return openSpace(sp);
+    }
+    if (!inv.asked) {
+      try { await acc.requestJoin(inv.id); } catch (e) {
+        if (e.status === 404 && !(await acc.readInvite(inv.id))) return set('gone');
+        if (e.status === 403 || e.status === 404) return set('scope');
+        throw e;
+      }
+      inv.asked = true;
+    }
+    set('waiting');
+  } catch (e) { console.warn('join', e); }
+  finally { joinBusy = false; }
+}
+setInterval(() => { if (S.auth && load(LS.invite, null)?.accepted && !$('#welcome').hidden && $('#homeJoin')) joinTick(); }, 3000);
 
 function spaceSheet() {
   const recent = S.spaces.filter(x => tokenFor(x));
@@ -1261,15 +1503,62 @@ function purgeSheet() {
   $('#purgeOk', sh).onclick = () => { closeSheet(); eraseHistory(); };
 }
 
-function passphraseSheet() {
-  const sh = openSheet(`<h2>${t('enc.change')}</h2>
-    <label class="field"><span>${t('enc.current')}</span><input id="ppOld" type="password" autocomplete="current-password"></label>
+/** Commit a new album.json (wrapped keys) for an encrypted album. */
+async function saveHeader(header, message) {
+  const sp = S.space;
+  await serial(async () => {
+    const sha = await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n'));
+    const r = await S.gh.commit({ files: [{ path: C.META_PATH, sha }], message: `${message} — @${S.me?.login || ''}`, base: S.base, title: S.index?.title });
+    S.gh.header = header;
+    if (S.space === sp) adopt(r);
+  });
+}
+
+function recoverySheet(code) {
+  const sh = openSheet(`<h2>${t('rec.title')}</h2><p class="sheet-p">${t('rec.body')}</p>
+    <div class="code-box" id="rcCode">${esc(code)}</div>
+    <div class="actions"><button class="btn btn-quiet" id="rcCopy">${t('common.copy')}</button><button class="btn btn-quiet" id="rcSave">${t('rec.save')}</button></div>
+    <button class="btn btn-primary btn-block" data-close style="margin-top:10px">${t('common.done')}</button>`, { kind: 'recovery' });
+  $('#rcCopy', sh).onclick = async () => { try { await navigator.clipboard.writeText(code); toast(t('common.copied')); } catch { getSelection().selectAllChildren($('#rcCode', sh)); } };
+  $('#rcSave', sh).onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([`Moa — ${S.space.owner}/${S.space.repo}\n${t('rec.title')}: ${code}\n`], { type: 'text/plain' }));
+    a.download = `moa-recovery-${S.space.repo}.txt`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  };
+}
+
+function newRecoverySheet() {
+  const had = hasRecovery(S.gh.header);
+  const sh = openSheet(`<h2>${t('rec.title')}</h2><p class="sheet-p">${t(had ? 'rec.replace' : 'rec.none')}</p>
+    ${had ? `<div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="rcPurge" checked><span></span></label></div>` : ''}
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="rcNew">${t(had ? 'rec.new' : 'rec.create')}</button></div>`);
+  $('#rcNew', sh).onclick = async () => {
+    const btn = $('#rcNew', sh);
+    btn.disabled = true;
+    const purge = !!$('#rcPurge', sh)?.checked;
+    try {
+      const code = newRecoveryCode();
+      await saveHeader(await withRecovery(S.gh.header, S.gh.key, code), 'Moa: new recovery code');
+      recoverySheet(code);
+      if (purge) eraseHistory(); // the old code's copy of the key stays in history until erased
+    } catch (e) { btn.disabled = false; toast(errMsg(e), 4000); }
+  };
+}
+
+/** forgot: this device holds the key, so the old passphrase isn't needed. */
+function passphraseSheet({ forgot = false, title } = {}) {
+  const sh = openSheet(`<h2>${title || t('enc.change')}</h2>
+    <label class="field" id="ppOldBox"${forgot ? ' hidden' : ''}><span>${t('enc.current')}</span><input id="ppOld" type="password" autocomplete="current-password"></label>
+    ${forgot ? '' : `<button class="text-btn forgot" id="ppForgot">${t('lock.forgot')}</button>`}
     <label class="field"><span>${t('enc.new')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
     <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"></label>
     <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="ppPurge" checked><span></span></label></div>
     <p class="err" id="ppErr" hidden></p>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="ppOk">${t('common.save')}</button></div>`);
-  setTimeout(() => $('#ppOld', sh).focus(), 50);
+  setTimeout(() => $(forgot ? '#encPass' : '#ppOld', sh).focus(), 50);
+  $('#ppForgot', sh)?.addEventListener('click', () => { forgot = true; $('#ppOldBox', sh).hidden = true; $('#ppForgot', sh).remove(); $('#encPass', sh).focus(); });
   $('#ppOk', sh).onclick = async () => {
     const err = $('#ppErr', sh);
     const fail = m => { err.textContent = m; err.hidden = false; };
@@ -1278,15 +1567,9 @@ function passphraseSheet() {
     if (a !== $('#encPass2', sh).value) return fail(t('enc.mismatch'));
     const btn = $('#ppOk', sh);
     btn.disabled = true; btn.textContent = t('lock.unlocking');
-    const sp = S.space;
     try {
-      await serial(async () => {
-        const header = await rewrapAlbumKey(S.gh.header, $('#ppOld', sh).value, a);
-        const sha = await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n'));
-        const r = await S.gh.commit({ files: [{ path: C.META_PATH, sha }], message: `Moa: change passphrase — @${S.me?.login || ''}`, base: S.base, title: S.index?.title });
-        S.gh.header = header;
-        if (S.space === sp) adopt(r);
-      });
+      const header = forgot ? await setPassphrase(S.gh.header, S.gh.key, a) : await rewrapAlbumKey(S.gh.header, $('#ppOld', sh).value, a);
+      await saveHeader(header, 'Moa: change passphrase');
       const purge = $('#ppPurge', sh).checked;
       closeSheet();
       toast(t('enc.changed'));
@@ -1297,6 +1580,131 @@ function passphraseSheet() {
       fail(e instanceof BadPassphrase ? t('lock.wrong') : errMsg(e));
     }
   };
+}
+
+// ---------------- encryption on / off for an existing album ----------------
+// Every file is fetched, re-stored in the other form under a new path, then one
+// commit swaps the whole album over. Progress survives a closed tab (the map of
+// converted files is kept per album), so a long run resumes where it stopped.
+
+const CONV = { running: false, done: 0, total: 0 };
+const LIVE_EXT = { 'video/quicktime': 'mov', 'video/mp4': 'mp4', 'video/webm': 'webm' };
+
+function plainPath(p, kind) {
+  const ym = C.mediaDir(p.takenAt || p.uploadedAt);
+  if (kind === 'preview') return `preview/${ym}/${p.id}.jpg`;
+  if (kind === 'thumb') return `thumb/${ym}/${p.id}.jpg`;
+  if (kind === 'live') return `media/${ym}/${p.id}.live.${LIVE_EXT[p.liveMime] || 'mov'}`;
+  return `media/${ym}/${p.id}.${C.extOf(p.name) || (p.kind === 'video' ? 'mp4' : 'jpg')}`;
+}
+
+const isOwner = () => !!S.repoInfo?.permissions?.admin;
+
+function convertProgress(toSealed) {
+  const label = t(toSealed ? 'conv.encrypting' : 'conv.decrypting');
+  setSync('converting', `${label} ${CONV.done}/${CONV.total}`);
+  const sh = $('#sheet');
+  if (sh.dataset.kind !== 'convert') return;
+  $('#cvCount', sh).textContent = `${CONV.done}/${CONV.total}`;
+  $('#cvBar', sh).style.transform = `scaleX(${CONV.total ? CONV.done / CONV.total : 0})`;
+}
+
+async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
+  if (CONV.running || U.running) return toast(t('up.busy'));
+  const sp = S.space, gh = S.gh;
+  let job = load(LS.convert(sp.id), null);
+  if (job && job.toSealed !== toSealed) job = null;
+  let target = null;
+  CONV.running = true;
+  try {
+    if (toSealed) {
+      let key = job ? await recallKey('convert:' + sp.id) : null;
+      if (!job || !key) {
+        if (!pass) { localStorage.removeItem(LS.convert(sp.id)); throw new Error(t('conv.restart')); }
+        const made = await createAlbumKey(pass);
+        const recovery = newRecoveryCode();
+        job = { toSealed, header: await withRecovery(made.header, made.key, recovery), recovery, map: {} };
+        key = made.key;
+        await rememberKey('convert:' + sp.id, key);
+        save(LS.convert(sp.id), job);
+      }
+      target = { header: job.header, key };
+    } else if (!job) {
+      job = { toSealed, map: {} };
+      save(LS.convert(sp.id), job);
+    }
+    openSheet(`<h2>${t(toSealed ? 'conv.encrypting' : 'conv.decrypting')} <small id="cvCount"></small></h2><div class="progress"><i id="cvBar"></i></div>`, { kind: 'convert' });
+    let r;
+    for (;;) {
+      const todo = Object.values(S.base.index.photos).flatMap(p => Object.entries(p.files || {}).filter(([k, v]) => v && !k.endsWith('Mime') && !(v in job.map)).map(([k, v]) => ({ p, k, path: v })));
+      CONV.total = Object.keys(job.map).length + todo.length;
+      CONV.done = Object.keys(job.map).length;
+      convertProgress(toSealed);
+      let n = 0;
+      for (const { p, k, path } of todo) {
+        if (S.space !== sp) throw new Error(t('conv.paused'));
+        let entry = null;
+        try {
+          const blob = await gh.media(path, { cache: k === 'thumb' || k === 'preview' });
+          const to = toSealed ? C.sealedPath() : plainPath(p, k);
+          entry = { path: to, sha: await gh.putMediaWith(blob, target?.key || null) };
+        } catch (e) { if (e.status !== 404) throw e; }
+        job.map[path] = entry;
+        CONV.done++;
+        if (++n % 6 === 0) save(LS.convert(sp.id), job);
+        convertProgress(toSealed);
+      }
+      save(LS.convert(sp.id), job);
+      const title = S.base.index.title || '';
+      r = await serial(() => gh.convertCommit({ map: job.map, target, readme: repoReadme(toSealed ? null : title), message: `Moa: ${toSealed ? 'encrypt' : 'decrypt'} album — @${S.me?.login || ''}` }));
+      if (!r.missing) break;
+      adopt(r.st); // a friend added photos meanwhile: convert those too
+    }
+    localStorage.removeItem(LS.convert(sp.id));
+    forgetKey('convert:' + sp.id);
+    if (toSealed) { S.keys.set(sp.id, target.key); await rememberKey(sp.id, target.key); } else { S.keys.delete(sp.id); forgetKey(sp.id); }
+    adopt(r.state);
+    const description = toSealed ? ENCRYPTED_DESCRIPTION : `${S.index.title} · Moa`;
+    gh.setDescription(description).then(() => { if (S.repoInfo) S.repoInfo.description = description; }).catch(() => {});
+    CONV.running = false;
+    setSync(null);
+    toast(t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
+    if (toSealed) recoverySheet(job.recovery); else closeSheet();
+    // encrypting only helps once the plain copies are gone from history too
+    if (toSealed || purge) await eraseHistory();
+    rerender();
+  } catch (e) {
+    console.error(e);
+    CONV.running = false;
+    setSync('error');
+    if ($('#sheet').dataset.kind === 'convert') closeSheet();
+    toast(t('conv.failed', { e: errMsg(e) }), 5000);
+    rerender();
+  }
+}
+
+function encryptAlbumSheet() {
+  if (load(LS.convert(S.space.id), null)?.toSealed) return convertAlbum(true);
+  const sh = openSheet(`<h2>${t('conv.encryptTitle')}</h2><p class="sheet-p">${t('conv.encryptBody')}</p>
+    <label class="field"><span>${t('enc.pass')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
+    <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"><small>${t('enc.lost')}</small></label>
+    <p class="err" id="cvErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="cvGo">${t('conv.encrypt')}</button></div>`);
+  setTimeout(() => $('#encPass', sh).focus(), 50);
+  $('#cvGo', sh).onclick = () => {
+    const a = $('#encPass', sh).value, err = $('#cvErr', sh);
+    if (a.length < 8) { err.textContent = t('enc.short'); err.hidden = false; return; }
+    if (a !== $('#encPass2', sh).value) { err.textContent = t('enc.mismatch'); err.hidden = false; return; }
+    convertAlbum(true, { pass: a });
+  };
+}
+
+function decryptAlbumSheet() {
+  if (load(LS.convert(S.space.id), null)?.toSealed === false) return convertAlbum(false);
+  const sh = openSheet(`<h2>${t('conv.decryptTitle')}</h2><p class="sheet-p">${t('conv.decryptBody')}</p>
+    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="cvPurge" checked><span></span></label></div>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="cvGo">${t('conv.decrypt')}</button></div>`);
+  $('#cvGo', sh).onclick = () => convertAlbum(false, { purge: $('#cvPurge', sh).checked });
 }
 
 function lockHere() {
@@ -1321,20 +1729,33 @@ function renderLocked(header) {
   c.innerHTML = `<div class="empty locked-album"><div class="lock-hero">${ICON.lock}</div>
     <h2>${t('lock.title')}</h2>
     <form id="unlockForm" autocomplete="off" style="max-width:340px;margin:0 auto;text-align:left">
-      <label class="field"><span>${t('lock.pass')}</span><input id="unlockPass" type="password" autocomplete="current-password" required></label>
+      <label class="field" id="unlockPassBox"><span>${t('lock.pass')}</span><input id="unlockPass" type="password" autocomplete="current-password"></label>
+      <label class="field" id="unlockCodeBox" hidden><span>${t('rec.title')}</span><input id="unlockCode" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
       <div class="row opt-row"><div class="grow"><b>${t('lock.remember')}</b></div><label class="switch"><input type="checkbox" id="unlockRemember" checked><span></span></label></div>
       <p class="err" id="unlockErr" hidden></p>
       <button class="btn btn-primary btn-block" type="submit" id="unlockBtn">${t('lock.unlock')}</button>
+      <button class="text-btn forgot" type="button" id="unlockForgot">${t('lock.forgot')}</button>
     </form></div>`;
   const sp = S.space;
+  let viaCode = false;
   setTimeout(() => $('#unlockPass')?.focus(), 50);
+  $('#unlockForgot').onclick = () => {
+    const err = $('#unlockErr');
+    if (!hasRecovery(header)) { err.textContent = t('rec.missing'); err.hidden = false; return; }
+    viaCode = !viaCode;
+    $('#unlockPassBox').hidden = viaCode;
+    $('#unlockCodeBox').hidden = !viaCode;
+    $('#unlockForgot').textContent = t(viaCode ? 'lock.usePass' : 'lock.forgot');
+    err.hidden = true;
+    $(viaCode ? '#unlockCode' : '#unlockPass').focus();
+  };
   $('#unlockForm').onsubmit = async e => {
     e.preventDefault();
     const btn = $('#unlockBtn'), err = $('#unlockErr');
     err.hidden = true;
     btn.disabled = true; btn.textContent = t('lock.unlocking');
     try {
-      const key = await unlockAlbumKey(header, $('#unlockPass').value);
+      const key = viaCode ? await unlockWithRecovery(header, $('#unlockCode').value) : await unlockAlbumKey(header, $('#unlockPass').value);
       if (S.space !== sp) return;
       S.gh.key = key;
       S.keys.set(sp.id, key);
@@ -1343,12 +1764,14 @@ function renderLocked(header) {
       if (S.space !== sp) return;
       setSync(S.pending.length ? 'pending' : null);
       if (S.pending.length) scheduleFlush(500);
+      // opened with the recovery code: the passphrase is lost, so set a new one now
+      if (viaCode && S.canWrite) passphraseSheet({ forgot: true, title: t('rec.setNew') });
     } catch (ex) {
       if (!$('#unlockBtn')) return;
       btn.disabled = false; btn.textContent = t('lock.unlock');
-      err.textContent = ex instanceof BadPassphrase ? t('lock.wrong') : errMsg(ex);
+      err.textContent = ex instanceof BadPassphrase ? t(viaCode ? 'rec.wrong' : 'lock.wrong') : errMsg(ex);
       err.hidden = false;
-      $('#unlockPass').select();
+      $(viaCode ? '#unlockCode' : '#unlockPass').select();
     }
   };
 }
@@ -1835,7 +2258,7 @@ const U = { running: false, entries: [], done: 0, failed: 0, total: 0 };
 async function handleFiles(fileList) {
   if (!S.index) return;
   if (!S.canWrite) return toast(t('readonly'));
-  if (U.running) return toast(t('up.busy'));
+  if (U.running || CONV.running) return toast(t('up.busy'));
   const files = [...fileList].filter(f => !/\.(aae|xmp|json)$/i.test(f.name));
   if (!files.length) return;
   const sh = openSheet(`<h2>${t('up.reading')}</h2><p class="up-summary" id="anaText">0 / ${files.length}</p><div class="progress"><i id="anaBar"></i></div>`, { kind: 'upload' });
@@ -2167,6 +2590,9 @@ function bind() {
       case 'invite': return inviteSheet();
       case 'purge': return purgeSheet();
       case 'passphrase': return passphraseSheet();
+      case 'recovery': return newRecoverySheet();
+      case 'encryptAlbum': return encryptAlbumSheet();
+      case 'decryptAlbum': return decryptAlbumSheet();
       case 'lockHere': return lockHere();
       case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });

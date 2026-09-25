@@ -11,13 +11,13 @@ test('config reports whether sign-in is set up', async () => {
   assert.equal((await oauth.config({ GITHUB_CLIENT_ID: 'x' }).json()).login, false, 'needs the secret too');
 });
 
-test('login redirects to GitHub with repo scope and a state cookie', () => {
+test('login redirects to GitHub with repo + gist scope and a state cookie', () => {
   const r = oauth.login(new Request(`${ORIGIN}/api/auth/login`), ENV);
   assert.equal(r.status, 302);
   const to = new URL(r.headers.get('location'));
   assert.equal(to.origin + to.pathname, 'https://github.com/login/oauth/authorize');
   assert.equal(to.searchParams.get('client_id'), 'cid');
-  assert.equal(to.searchParams.get('scope'), 'repo');
+  assert.equal(to.searchParams.get('scope'), 'repo gist');
   assert.equal(to.searchParams.get('redirect_uri'), `${ORIGIN}/api/auth/callback`);
   const state = to.searchParams.get('state');
   assert.match(state, /^[0-9a-f]{32}$/);

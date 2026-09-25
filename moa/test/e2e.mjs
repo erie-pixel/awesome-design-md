@@ -25,7 +25,7 @@ const API = `http://localhost:${API_PORT}`;
 const APP = `http://localhost:${APP_PORT}/index.html`;
 
 // ---------- servers ----------
-const { server: apiServer, api } = createMockGitHub({ extraLogins: ['dave'] });
+const { server: apiServer, api } = createMockGitHub({ users: { 'tok-alice': 'alice', 'tok-bob': 'bob', 'tok-dave': 'dave' } });
 await new Promise(r => apiServer.listen(API_PORT, r));
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 
@@ -36,14 +36,14 @@ const CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).
 // The real /api/auth/* handlers, pointed at a fake github.com served below.
 const APP_ORIGIN = `http://localhost:${APP_PORT}`;
 const ENV = { GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret', GITHUB_URL: `${APP_ORIGIN}/fake-github`, GITHUB_API_URL: API };
-const TOKENS = { alice: 'tok-alice', bob: 'tok-bob' };
+const TOKENS = { alice: 'tok-alice', bob: 'tok-bob', dave: 'tok-dave' };
 const authStats = { revoked: 0, exchanged: 0 };
 const fakeFetch = async (url, init) => {
   if (url.endsWith('/login/oauth/access_token')) {
     const b = JSON.parse(init.body);
     authStats.exchanged++;
     const who = b.client_id === 'cid' && b.client_secret === 'csecret' && b.code?.startsWith('code-') ? b.code.slice(5) : null;
-    return Response.json(TOKENS[who] ? { access_token: TOKENS[who], scope: 'repo', token_type: 'bearer' } : { error: 'bad_verification_code' });
+    return Response.json(TOKENS[who] ? { access_token: TOKENS[who], scope: 'gist,repo', token_type: 'bearer' } : { error: 'bad_verification_code' });
   }
   if (url.includes('/applications/cid/token') && init.method === 'DELETE') { authStats.revoked++; return new Response(null, { status: 204 }); }
   throw new Error('unexpected fetch ' + url);
@@ -68,7 +68,7 @@ const appServer = http.createServer(async (req, res) => {
   if (u.pathname === '/fake-github/login/oauth/authorize') {
     const who = /(?:^|;\s*)as=(\w+)/.exec(req.headers.cookie || '')?.[1];
     const back = new URL(u.searchParams.get('redirect_uri'));
-    if (u.searchParams.get('client_id') !== 'cid' || u.searchParams.get('scope') !== 'repo') back.searchParams.set('error', 'bad_client');
+    if (u.searchParams.get('client_id') !== 'cid' || u.searchParams.get('scope') !== 'repo gist') back.searchParams.set('error', 'bad_client');
     else if (!who) back.searchParams.set('error', 'access_denied');
     else { back.searchParams.set('code', `code-${who}`); back.searchParams.set('state', u.searchParams.get('state')); }
     res.writeHead(302, { Location: back.toString() });
@@ -465,7 +465,13 @@ try {
   if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13-new-encrypted.png` }); }
   await A.click('#nrOk');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'), null, { timeout: 20000 });
+  await A.waitForSelector('#rcCode');
+  const REC = (await A.textContent('#rcCode')).trim();
+  ok(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){5}$/.test(REC), `a recovery code is shown once the album exists (${REC.slice(0, 4)}-…)`);
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13b-recovery-code.png` }); }
+  await A.click('#sheet [data-close].btn-primary');
   const RE = api.at(`alice/${encName}`);
+  ok(!!JSON.parse(RE.fileText('album.json')).recovery, 'album.json also holds the key wrapped by the recovery code');
   const header = JSON.parse(RE.fileText('album.json'));
   ok(K.isHeader(header) && !RE.fileText('album.json').includes('비밀') && RE.repo.description === 'Moa · encrypted' && !RE.fileText('README.md').includes('비밀'), 'album.json holds only the wrapped key; no title in description or README');
   await A.setInputFiles('#fileInput', [files[0], files[5], files[1]]);
@@ -558,12 +564,118 @@ try {
   ok(true, '"Lock on this device" forgets the key');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/15-settings-encrypted.png`, fullPage: true });
 
+  // forgot the passphrase: the recovery code opens the album, then a new passphrase is set
+  const PASS3 = 'third passphrase after recovery';
+  await B.click('#unlockForgot');
+  await B.fill('#unlockCode', REC.toLowerCase().replace(/-/g, ' '));
+  await B.click('#unlockBtn');
+  await B.waitForSelector('#ppOk', { timeout: 20000 });
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
+  ok(await B.isHidden('#ppOldBox'), 'recovery code unlocks and asks for a new passphrase (no old one needed)');
+  const hRec = RE.fileText('album.json');
+  await B.fill('#encPass', PASS3);
+  await B.fill('#encPass2', PASS3);
+  await B.click('#ppOk');
+  await until(() => RE.fileText('album.json') !== hRec && RE.history().length === 1, 150000);
+  const h3 = JSON.parse(RE.fileText('album.json'));
+  const k3 = await K.unlockAlbumKey(h3, PASS3);
+  ok(!!k3 && !!(await K.unlockWithRecovery(h3, REC)), 'new passphrase works and the recovery code still does');
+
+  // turn encryption off, then on again, on the same album
+  const sealedSha = RE.shaOf(RE.paths().find(p => p.startsWith('data/')));
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=decryptAlbum]');
+  await A.click('#cvGo');
+  await until(() => { try { return JSON.parse(RE.fileText('album.json')).app === 'moa' && RE.history().length === 1; } catch { return false; } }, 150000);
+  const plainPaths = RE.paths();
+  ok(!plainPaths.some(p => p.startsWith('data/') || p.endsWith('.bin')) && plainPaths.some(p => /^thumb\/\d{4}\/\d\d\/\d\d\//.test(p)) && plainPaths.some(p => /^index\/\d{4}-\d\d\.json$/.test(p)), 'encryption off: files back under dated paths, readable index');
+  ok(readIndex(RE).title === '비밀 여행' && RE.repo.description === '비밀 여행 · Moa' && !RE.reachable(sealedSha), 'title restored to description; encrypted copies erased from history');
+  await B.evaluate(() => window.__moa.refresh());
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1 && !window.__moa.S.gh.sealed, null, { timeout: 20000 });
+  ok(true, 'friend sees the album without a passphrase');
+  const PASS4 = 'encrypted once again';
+  const plainSha = RE.shaOf(plainPaths.find(p => p.startsWith('thumb/')));
+  await A.waitForSelector('[data-act=encryptAlbum]');
+  await A.click('[data-act=encryptAlbum]');
+  await A.fill('#encPass', PASS4);
+  await A.fill('#encPass2', PASS4);
+  await A.click('#cvGo');
+  await A.waitForSelector('#rcCode', { timeout: 150000 });
+  ok(true, 'encrypting an existing album hands out a recovery code');
+  await A.click('#sheet [data-close].btn-primary');
+  await until(() => RE.history().length === 1 && K.isHeader(JSON.parse(RE.fileText('album.json'))), 150000);
+  const reStored = RE.paths().filter(p => p !== 'album.json' && p !== 'README.md');
+  ok(reStored.every(p => RE.fileBytes(p).subarray(0, 4).toString() === 'MOA1') && !RE.reachable(plainSha) && RE.repo.description === 'Moa · encrypted', 'encryption on: everything sealed, plain copies erased from history');
+  await B.evaluate(() => window.__moa.refresh());
+  await B.waitForSelector('#unlockForm', { timeout: 20000 });
+  await B.fill('#unlockPass', PASS4);
+  await B.click('#unlockBtn');
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
+  ok(true, 'friend needs the new passphrase once, then sees the photo');
+
+  // ---------- invite link / QR: dave joins without anyone typing his username ----------
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=invite]');
+  await A.click('#invOnce');
+  await A.waitForSelector('#invShow .qr');
+  const onceLink = await A.inputValue('#invLink');
+  ok(onceLink.includes('#invite=') && onceLink.includes('&k=') && api.gists.size === 1, 'one-time QR + link created (carries the album key for an encrypted album)');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/16-invite-qr.png` }); }
+  const ctxD = await browser.newContext(phone);
+  await stub(ctxD);
+  await ctxD.addCookies([{ name: 'as', value: 'dave', url: APP_ORIGIN }]);
+  const D = await ctxD.newPage();
+  watch(D, 'D');
+  await D.goto(onceLink.replace(/^https?:\/\/[^/]+\//, APP_ORIGIN + '/'));
+  ok((await D.textContent('.invite-banner')).includes('invited'), 'invite link opens a sign-in screen that says you are invited');
+  await D.click('#loginBtn');
+  await D.waitForSelector('[data-join=go]', { timeout: 20000 });
+  ok((await D.textContent('.join-card')).includes('@alice'), 'after sign-in: "Join … from @alice?"');
+  if (SHOTS) await D.screenshot({ path: `${SHOTS}/17-join-ask.png` });
+  ok(!RE.repo.collaborators.has('dave') && !RE.repo.invitations.some(i => i.invitee === 'dave'), 'nothing happens before dave chooses to join');
+  await D.click('[data-join=go]');
+  await D.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 30000 });
+  ok(RE.repo.collaborators.get('dave') === 'push' && !(await D.isVisible('#unlockForm')), 'owner\'s app let dave in, dave\'s app accepted; the key from the link opened the photos');
+  ok(api.gists.size === 0, 'one-time invite deleted after use');
+  await A.click('#scrim', { position: { x: 10, y: 10 } });
+  // a used one-time link is dead
+  await B.goto(onceLink.replace(/^https?:\/\/[^/]+\//, APP_ORIGIN + '/'));
+  await B.waitForSelector('.join-card[data-state=gone]', { timeout: 20000 });
+  ok(true, 'the used one-time link says it was already used (opened in a tab where Moa was already running)');
+  await B.click('[data-join=cancel]');
+
+  // 7-day link, joined by typing the code
+  await A.click('[data-tab=settings]');
+  await A.click(`[data-space="alice/moa-spring-trip"]`);
+  await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 4, null, { timeout: 20000 });
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=invite]');
+  await A.click('#invWeek');
+  await A.waitForSelector('#invShow .qr');
+  const code = (await A.textContent('#invCode')).trim();
+  ok(!(await A.isVisible('#invKey')) && !(await A.inputValue('#invLink')).includes('&k='), 'a plain album\'s link carries no key');
+  await D.click('#spaceBtn');
+  await D.click('[data-act=home]');
+  await D.click('#codeBtn');
+  await D.fill('#joinCode', code.toUpperCase());
+  await D.click('#joinOk');
+  await D.waitForSelector('[data-join=go]', { timeout: 20000 });
+  await D.click('[data-join=go]');
+  await D.waitForFunction(() => document.querySelectorAll('#content .tile').length === 4, null, { timeout: 30000 });
+  ok(RA.repo.collaborators.get('dave') === 'push' && api.gists.size === 1, 'code entry works; a 7-day link stays open for others');
+  ok((await A.textContent('#invActive')).includes('Revoke'), 'owner sees the open invite with a Revoke button');
+  await A.click('#invActive [data-revoke]');
+  await until(() => api.gists.size === 0);
+  ok(true, 'revoking deletes the invite');
+  await A.click('#scrim', { position: { x: 10, y: 10 } });
+  await ctxD.close();
+
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 
   // sign-out revokes the grant and forgets the token
   B.once('dialog', d => d.accept());
-  await B.fill('#unlockPass', PASS2);
-  await B.click('#unlockBtn');
+  await B.click('[data-act=home]').catch(() => {});
+  await B.click('[data-repo]');
   await B.waitForSelector('#content .tile', { timeout: 20000 });
   await B.click('[data-tab=settings]');
   await B.click('[data-act=logout]');

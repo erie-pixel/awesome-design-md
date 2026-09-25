@@ -4,9 +4,12 @@
    album.json keeps that key wrapped by a key derived from the album
    passphrase (PBKDF2-SHA-256), so a new passphrase rewraps 32 bytes
    instead of re-encrypting every photo.
+   A second copy is wrapped by a random recovery code, so a lost
+   passphrase isn't a lost album.
    Sealed file layout: "MOA1" | 12-byte IV | ciphertext + 16-byte tag.
-   The unwrapped key never leaves this device: it is imported as
-   non-extractable and, if asked, remembered in IndexedDB.
+   The unwrapped key stays on this device (IndexedDB, if asked). It is
+   extractable so an unlocked device can set a new passphrase or put
+   the key into an invite link.
    ============================================================ */
 
 const subtle = globalThis.crypto.subtle;
@@ -37,7 +40,8 @@ async function passKey(passphrase, salt, iterations) {
   return subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 
-const albumKey = raw => subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+const albumKey = raw => subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+const rawOf = async key => new Uint8Array(await subtle.exportKey('raw', key));
 
 async function wrap(raw, passphrase, iterations) {
   const salt = rand(16), iv = rand(12);
@@ -45,10 +49,11 @@ async function wrap(raw, passphrase, iterations) {
   return { kdf: { name: 'PBKDF2-SHA-256', iterations, salt: b64(salt) }, wrapped: { iv: b64(iv), data: b64(data) } };
 }
 
-async function unwrap(header, passphrase) {
+/** slot = { kdf, wrapped } — the header itself (passphrase) or header.recovery. */
+async function unwrap(slot, secret) {
   try {
-    const k = await passKey(passphrase, unb64(header.kdf.salt), header.kdf.iterations);
-    return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(header.wrapped.iv) }, k, unb64(header.wrapped.data)));
+    const k = await passKey(secret, unb64(slot.kdf.salt), slot.kdf.iterations);
+    return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(slot.wrapped.iv) }, k, unb64(slot.wrapped.data)));
   } catch {
     throw new BadPassphrase('bad passphrase');
   }
@@ -68,10 +73,56 @@ export async function unlockAlbumKey(header, passphrase) {
   return albumKey(await unwrap(header, passphrase));
 }
 
-/** Same album key under a new passphrase. */
+/** Same album key under a new passphrase (the recovery code keeps working). */
 export async function rewrapAlbumKey(header, oldPassphrase, newPassphrase) {
   const raw = await unwrap(header, oldPassphrase);
   return { ...header, ...(await wrap(raw, newPassphrase, Math.max(header.kdf.iterations, KDF_ITERATIONS))) };
+}
+
+/** New passphrase from a device that already holds the key (forgot the old one). */
+export async function setPassphrase(header, key, newPassphrase) {
+  return { ...header, ...(await wrap(await rawOf(key), newPassphrase, KDF_ITERATIONS)) };
+}
+
+// ---------- recovery code: 120 random bits, Crockford base32, XXXX-XXXX-XXXX-XXXX-XXXX-XXXX ----------
+
+const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const RECOVERY_ITERATIONS = 20000; // the code itself carries the strength
+
+export function newRecoveryCode() {
+  const bytes = rand(15);
+  let bits = 0, n = 0, out = '';
+  for (const b of bytes) { n = (n << 8) | b; bits += 8; while (bits >= 5) { out += B32[(n >> (bits - 5)) & 31]; bits -= 5; } }
+  return out.match(/.{4}/g).join('-');
+}
+
+/** Typed codes forgive case, spaces, dashes and the usual look-alikes (O→0, I/L→1). */
+export function normalizeRecoveryCode(code) {
+  const s = String(code).toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+  return s.length === 24 ? s.match(/.{4}/g).join('-') : s;
+}
+
+export async function withRecovery(header, key, code) {
+  return { ...header, recovery: await wrap(await rawOf(key), normalizeRecoveryCode(code), RECOVERY_ITERATIONS) };
+}
+
+export const hasRecovery = header => !!header?.recovery;
+
+export async function unlockWithRecovery(header, code) {
+  if (!header.recovery) throw new BadPassphrase('no recovery code');
+  return albumKey(await unwrap(header.recovery, normalizeRecoveryCode(code)));
+}
+
+// ---------- the key as text, for an invite link's #fragment ----------
+
+export async function keyToText(key) {
+  return b64(await rawOf(key)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export async function keyFromText(text) {
+  const raw = unb64(String(text).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4));
+  if (raw.length !== 32) throw new Error('bad key');
+  return albumKey(raw);
 }
 
 export function isSealed(u8) {

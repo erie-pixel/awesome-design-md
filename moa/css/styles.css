@@ -367,6 +367,16 @@ details.guide[open] summary::after { transform: rotate(45deg); }
 .lock-hero { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 20px; display: grid; place-items: center; background: var(--chip); color: var(--ink); }
 .lock-hero svg { width: 30px; height: 30px; }
 .locked-album h2 { margin-bottom: 22px; }
+.invite-card { display: grid; justify-items: center; gap: 10px; margin-top: 14px; padding: 18px 16px; border-radius: var(--r-lg, 18px); background: var(--card); box-shadow: 0 0 0 1px var(--hairline); }
+.invite-card .qr { width: min(220px, 62vw); height: auto; border-radius: 10px; }
+.invite-card small { color: var(--muted); font-size: 13px; text-align: center; }
+.invite-card .link-field, .invite-card .actions { width: 100%; }
+.code-box.small { font-size: 15px; padding: 8px 12px; width: 100%; }
+.join-card { display: grid; gap: 12px; }
+.join-card .actions { margin: 0; }
+.join-card .actions .btn { flex: 1; }
+.text-btn.forgot { display: block; margin: 12px auto 0; }
+.code-box { font: 600 19px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; text-align: center; padding: 16px 12px; border-radius: var(--r-md); background: var(--chip); color: var(--ink); user-select: all; -webkit-user-select: all; word-break: break-all; }
 .locked-album .opt-row b { color: var(--ink); }
 .locked-album .err { margin: 0 4px 12px; }
 .sheet .actions { display: flex; gap: 8px; margin-top: 18px; }

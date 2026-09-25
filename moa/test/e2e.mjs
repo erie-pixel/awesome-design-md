@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMockGitHub } from './mock-github.mjs';
 import { withExif } from './fixtures.mjs';
+import * as oauth from '../server/oauth.js';
 
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch { ({ chromium } = await import('/opt/node22/lib/node_modules/playwright/index.mjs')); }
@@ -23,19 +24,71 @@ const API = `http://localhost:${API_PORT}`;
 const APP = `http://localhost:${APP_PORT}/index.html`;
 
 // ---------- servers ----------
-const { server: apiServer, api } = createMockGitHub();
+const { server: apiServer, api } = createMockGitHub({ extraLogins: ['dave'] });
 await new Promise(r => apiServer.listen(API_PORT, r));
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
-const appServer = http.createServer((req, res) => {
-  const p = path.join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+
+// Same CSP as production (vercel.json), with the mock API origin allowed.
+const CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers[0].headers.find(h => h.key === 'Content-Security-Policy').value
+  .replace("connect-src 'self'", `connect-src 'self' ${API} http://localhost:${API_PORT + 1}`);
+
+// The real /api/auth/* handlers, pointed at a fake github.com served below.
+const APP_ORIGIN = `http://localhost:${APP_PORT}`;
+const ENV = { GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret', GITHUB_URL: `${APP_ORIGIN}/fake-github`, GITHUB_API_URL: API };
+const TOKENS = { alice: 'tok-alice', bob: 'tok-bob' };
+const authStats = { revoked: 0, exchanged: 0 };
+const fakeFetch = async (url, init) => {
+  if (url.endsWith('/login/oauth/access_token')) {
+    const b = JSON.parse(init.body);
+    authStats.exchanged++;
+    const who = b.client_id === 'cid' && b.client_secret === 'csecret' && b.code?.startsWith('code-') ? b.code.slice(5) : null;
+    return Response.json(TOKENS[who] ? { access_token: TOKENS[who], scope: 'repo', token_type: 'bearer' } : { error: 'bad_verification_code' });
+  }
+  if (url.includes('/applications/cid/token') && init.method === 'DELETE') { authStats.revoked++; return new Response(null, { status: 204 }); }
+  throw new Error('unexpected fetch ' + url);
+};
+async function toWebRequest(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return new Request(APP_ORIGIN + req.url, { method: req.method, headers: req.headers, body: chunks.length ? Buffer.concat(chunks) : undefined });
+}
+async function sendWeb(res, r) {
+  const headers = {};
+  r.headers.forEach((v, k) => { if (k !== 'set-cookie') headers[k] = v; });
+  const cookies = r.headers.getSetCookie();
+  if (cookies.length) headers['set-cookie'] = cookies;
+  res.writeHead(r.status, headers);
+  res.end(Buffer.from(await r.arrayBuffer()));
+}
+
+const appServer = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  // GitHub's consent screen: approve as whoever the `as` cookie names
+  if (u.pathname === '/fake-github/login/oauth/authorize') {
+    const who = /(?:^|;\s*)as=(\w+)/.exec(req.headers.cookie || '')?.[1];
+    const back = new URL(u.searchParams.get('redirect_uri'));
+    if (u.searchParams.get('client_id') !== 'cid' || u.searchParams.get('scope') !== 'repo') back.searchParams.set('error', 'bad_client');
+    else if (!who) back.searchParams.set('error', 'access_denied');
+    else { back.searchParams.set('code', `code-${who}`); back.searchParams.set('state', u.searchParams.get('state')); }
+    res.writeHead(302, { Location: back.toString() });
+    return res.end();
+  }
+  if (u.pathname.startsWith('/api/auth/')) {
+    const r = await toWebRequest(req);
+    const name = u.pathname.split('/').pop();
+    const out = name === 'config' ? oauth.config(ENV) : name === 'login' ? oauth.login(r, ENV) : name === 'callback' ? await oauth.callback(r, ENV, fakeFetch) : name === 'revoke' ? await oauth.revoke(r, ENV, fakeFetch) : new Response('nope', { status: 404 });
+    return sendWeb(res, out);
+  }
+  const p = path.join(ROOT, decodeURIComponent(u.pathname === '/' ? '/index.html' : u.pathname));
   if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' });
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Content-Security-Policy': CSP });
   fs.createReadStream(p).pipe(res);
 });
 await new Promise(r => appServer.listen(APP_PORT, r));
 
+let RA; // alice's album repository, once created
 // the album as the repository holds it: album.json + index/*.json shards
-const readIndex = (m = api) => {
+const readIndex = (m = RA) => {
   const meta = JSON.parse(m.fileText('album.json'));
   const photos = {};
   for (const p of m.paths().filter(p => p.startsWith('index/'))) Object.assign(photos, JSON.parse(m.fileText(p)).photos);
@@ -44,6 +97,10 @@ const readIndex = (m = api) => {
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) failures++; };
+const watch = (page, who) => {
+  page.on('pageerror', e => { console.log(`pageerror(${who}):`, e.message); failures++; });
+  page.on('console', m => { if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) { console.log(`CSP(${who}):`, m.text()); failures++; } });
+};
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
 
 try {
@@ -119,17 +176,26 @@ try {
   const ctxA = await browser.newContext(phone);
   await stub(ctxA);
   const A = await ctxA.newPage();
-  A.on('pageerror', e => { console.log('pageerror(A):', e.message); failures++; });
-  await A.goto(`${APP}#join=alice/photos&api=${encodeURIComponent(API)}`);
-  await A.fill('input[name=token]', 'tok-alice');
-  if (SHOTS) await A.screenshot({ path: `${SHOTS}/01-welcome.png` });
-  await A.click('#connectForm button[type=submit]');
-  await A.waitForSelector('#initBtn');
-  ok(true, 'empty repository offers to create an album');
-  await A.fill('#initTitle', '우리들의 봄 여행');
-  await A.click('#initBtn');
+  watch(A, 'A');
+  await ctxA.addCookies([{ name: 'as', value: 'alice', url: APP_ORIGIN }]);
+  await A.goto(APP);
+  await A.waitForSelector('#loginBtn');
+  ok(!(await A.isVisible('#connectForm')), 'welcome leads with "GitHub로 시작하기"; token form tucked away');
+  if (SHOTS) { await A.waitForTimeout(600); await A.screenshot({ path: `${SHOTS}/01-welcome.png` }); }
+  await A.click('#loginBtn');
+  await A.waitForSelector('#newRepoBtn');
+  ok(authStats.exchanged === 1 && (await A.evaluate(() => JSON.parse(localStorage.getItem('moa.auth')).login)) === 'alice', 'signed in through the OAuth callback — no token typed');
+  ok(!(await A.evaluate(() => location.hash)), 'token removed from the address bar');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/01b-home-empty.png` });
+  await A.click('#newRepoBtn');
+  await A.fill('#nrTitle', '우리들의 봄 여행');
+  ok(/^moa-\d{8}$/.test(await A.inputValue('#nrName')), 'Korean album name gets an ASCII repository name');
+  await A.fill('#nrName', 'moa-spring-trip');
+  await A.click('#nrOk');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('첫 사진'));
-  ok(api.paths().includes('album.json') && api.paths().includes('README.md') && !api.paths().includes('index.json'), 'album initialized with README.md + album.json');
+  RA = api.at('alice/moa-spring-trip');
+  ok(RA.repo.private && RA.repo.topics.includes('moa-album'), 'album repository created private and tagged moa-album');
+  ok(RA.paths().includes('album.json') && RA.paths().includes('README.md') && !RA.paths().includes('index.json'), 'album initialized with README.md + album.json');
   ok(readIndex().members.alice, 'alice recorded as member');
 
   await A.setInputFiles('#fileInput', files);
@@ -150,13 +216,13 @@ try {
   ok(true, '5 tiles in the library after upload');
   const ix1 = readIndex();
   const live = Object.values(ix1.photos).find(p => p.name === 'IMG_0001.JPG');
-  ok(live && live.files.live && api.paths().includes(live.files.live), 'Live Photo video stored next to the still');
+  ok(live && live.files.live && RA.paths().includes(live.files.live), 'Live Photo video stored next to the still');
   ok(live.contentId === 'D5B3C7E2-0001-4C44-9A0B-LIVEPHOTO001', 'Apple content identifier kept');
   ok(live.takenAt === '2024-05-04T06:12:09' && live.tz === '+09:00' && Math.abs(live.gps.lat - 33.4589) < 1e-4, 'EXIF date/offset/GPS stored');
   ok(Object.values(ix1.photos).every(p => p.tags?.includes('봄여행')), 'upload tags applied');
-  ok(Object.values(ix1.photos).every(p => ['original', 'preview', 'thumb'].every(k => api.paths().includes(p.files[k]))), 'original + preview + thumb files committed');
+  ok(Object.values(ix1.photos).every(p => ['original', 'preview', 'thumb'].every(k => RA.paths().includes(p.files[k]))), 'original + preview + thumb files committed');
   ok(/^media\/2024\/05\/04\//.test(live.files.original), `media stored in day folders (${live.files.original})`);
-  ok(['index/2023-12.json', 'index/2024-02.json', 'index/2024-05.json'].every(p => api.paths().includes(p)), 'index split into monthly shards');
+  ok(['index/2023-12.json', 'index/2024-02.json', 'index/2024-05.json'].every(p => RA.paths().includes(p)), 'index split into monthly shards');
 
   // place names resolve in the background and are committed
   await A.waitForFunction(() => Object.values(window.__moa.S.index.photos).filter(p => p.place).length === 4, null, { timeout: 30000 });
@@ -223,16 +289,36 @@ try {
   ok(album?.name === '제주 3박 4일' && Object.values(ix3.photos).filter(p => p.albums?.includes(album.id)).length === 3, 'album created with 3 selected photos');
   ok(Object.values(ix3.photos).find(p => p.id === live.id).tags.includes('제주'), 'tag edit committed');
 
-  // ---------- Bob joins with his own token ----------
+  // ---------- Alice invites Bob by GitHub username ----------
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=invite]');
+  await A.fill('#invUser', 'nobody-here');
+  await A.click('#invSend');
+  await A.waitForFunction(() => document.querySelector('#toast').textContent.includes('그런 GitHub 아이디가 없어요'));
+  ok(true, 'unknown GitHub username is reported');
+  await A.fill('#invUser', 'bob');
+  await A.click('#invSend');
+  await A.waitForSelector('#invList :text("초대 수락 대기 중")');
+  ok(RA.repo.invitations.some(i => i.invitee === 'bob'), 'invitation created on GitHub for @bob');
+  if (SHOTS) { await A.waitForTimeout(400); await A.screenshot({ path: `${SHOTS}/08a-invite.png` }); }
+  await A.click('#scrim', { position: { x: 10, y: 10 } });
+  await A.click('[data-tab=photos]');
+
+  // ---------- Bob signs in and accepts ----------
   const ctxB = await browser.newContext({ viewport: { width: 1280, height: 820 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
   await stub(ctxB);
+  await ctxB.addCookies([{ name: 'as', value: 'bob', url: APP_ORIGIN }]);
   const B = await ctxB.newPage();
-  B.on('pageerror', e => { console.log('pageerror(B):', e.message); failures++; });
-  await B.goto(`${APP}#join=alice/photos&api=${encodeURIComponent(API)}&by=alice`);
+  watch(B, 'B');
+  await B.goto(`${APP}#join=alice/moa-spring-trip&by=alice`);
   ok((await B.textContent('.invite-banner')).includes('@alice'), 'invite link shows who invited');
-  await B.fill('input[name=token]', 'tok-bob');
-  await B.click('#connectForm button[type=submit]');
+  await B.click('#loginBtn');
+  await B.waitForSelector('[data-accept]');
+  ok((await B.textContent('#homeInvites')).includes('우리들의 봄 여행'), 'bob sees the invitation after signing in');
+  if (SHOTS) await B.screenshot({ path: `${SHOTS}/08b-accept.png` });
+  await B.click('[data-accept]');
   await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 5);
+  ok(RA.repo.collaborators.get('bob') === 'push', 'accepting makes bob a collaborator');
   ok(true, 'bob sees all 5 photos');
   await B.evaluate(() => window.__moa.flush());
   await B.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
@@ -248,8 +334,8 @@ try {
   const [p0, p1] = await B.$$eval('#content .tile', t => [t[0].dataset.id, t[1].dataset.id]);
   const conflictsBefore = api.stats.conflicts;
   const shardOfP = id => `index/${readIndex().photos[id].takenAt.slice(0, 7)}.json`;
-  api.commitJson(shardOfP(p1), d => { d.photos[p1].caption = '다른 기기에서 먼저 저장'; }, 'external write');
-  const shardShas = Object.fromEntries(api.paths().filter(p => p.startsWith('index/')).map(p => [p, api.shaOf(p)]));
+  RA.commitJson(shardOfP(p1), d => { d.photos[p1].caption = '다른 기기에서 먼저 저장'; }, 'external write');
+  const shardShas = Object.fromEntries(RA.paths().filter(p => p.startsWith('index/')).map(p => [p, RA.shaOf(p)]));
   await B.click(`#content .tile[data-id="${p0}"]`);
   await B.click('[data-v=like]');
   await Promise.all([
@@ -262,7 +348,7 @@ try {
   ok(ix4.photos[p0].likes?.includes('bob'), 'bob\'s like saved');
   ok(ix4.photos[p1].tags?.includes('동시편집') && ix4.photos[p1].caption === '다른 기기에서 먼저 저장', 'alice\'s concurrent tag merged with the external caption');
   ok(api.stats.conflicts > conflictsBefore, `fast-forward conflicts happened and were retried (${api.stats.conflicts - conflictsBefore})`);
-  const touched = Object.keys(shardShas).filter(p => api.shaOf(p) !== shardShas[p]).sort();
+  const touched = Object.keys(shardShas).filter(p => RA.shaOf(p) !== shardShas[p]).sort();
   const expected = [...new Set([shardOfP(p0), shardOfP(p1)])].sort();
   ok(JSON.stringify(touched) === JSON.stringify(expected), `edits rewrote only the touched shards (${touched.join(', ')})`);
   // comment
@@ -301,7 +387,7 @@ try {
   await A.click('[data-i=delete]');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  ok(!readIndex().photos[p1] && !api.paths().includes(victim.files.thumb) && !api.paths().includes(victim.files.original), 'delete removes entry and its files');
+  ok(!readIndex().photos[p1] && !RA.paths().includes(victim.files.thumb) && !RA.paths().includes(victim.files.original), 'delete removes entry and its files');
 
   // duplicate upload is skipped
   await A.keyboard.press('Escape'); // closes the info panel
@@ -322,7 +408,7 @@ try {
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/09-settings.png`, fullPage: true });
   await A.click('[data-act=invite]');
   const link = await A.inputValue('#inviteLink');
-  ok(link.includes('#join=alice%2Fphotos') && link.includes('by=alice'), 'invite link generated');
+  ok(link.includes('#join=alice%2Fmoa-spring-trip') && link.includes('by=alice'), 'invite link generated');
   await A.click('#scrim', { position: { x: 10, y: 10 } });
 
   // albums tab
@@ -333,22 +419,31 @@ try {
   ok((await A.textContent('#hero h1')) === '제주 3박 4일', 'album page opens');
 
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute (peak ${api.maxPushesPerMinute(u)})`);
+
+  // sign-out revokes the grant and forgets the token
+  B.once('dialog', d => d.accept());
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=logout]');
+  await B.waitForSelector('#loginBtn');
+  ok(authStats.revoked === 1 && !(await B.evaluate(() => localStorage.getItem('moa.auth'))), 'logout revokes the token on GitHub and clears it locally');
   console.log(`\nmock API: ${api.stats.requests} requests, ${api.stats.commits} commits, ${api.stats.conflicts} conflicts`);
 
   // ---------- a v1 album (single index.json) migrates, and a nearly full repo warns ----------
-  const legacy = createMockGitHub({ owner: 'carol', repo: 'old', users: { 'tok-carol': 'carol' } });
+  const legacy = createMockGitHub({ users: { 'tok-carol': 'carol' }, repos: [{ owner: 'carol', repo: 'old' }] });
+  const LR = legacy.api.at('carol/old');
   await new Promise(r => legacy.server.listen(API_PORT + 1, r));
   const old = { app: 'moa', version: 1, title: '예전 앨범', createdAt: '2025-01-01T00:00:00Z', members: { carol: { joinedAt: '2025-01-01T00:00:00Z' } }, albums: {},
     photos: { x1: { id: 'x1', kind: 'photo', name: 'a.jpg', takenAt: '2025-03-01T10:00:00', ts: 1740790800000, files: { thumb: 'thumb/2025/03/x1.jpg', preview: 'preview/2025/03/x1.jpg' }, sizes: { preview: 500000, thumb: 40000 }, by: 'carol', uploadedAt: '2025-03-02T00:00:00Z' } } };
-  legacy.api.putFile('index.json', JSON.stringify(old));
-  legacy.api.putFile('thumb/2025/03/x1.jpg', TILE);
-  legacy.api.putFile('preview/2025/03/x1.jpg', TILE);
-  legacy.api.setSizeKB(Math.round(9.7 * 1024 * 1024));
+  LR.putFile('index.json', JSON.stringify(old));
+  LR.putFile('thumb/2025/03/x1.jpg', TILE);
+  LR.putFile('preview/2025/03/x1.jpg', TILE);
+  LR.setSizeKB(Math.round(9.7 * 1024 * 1024));
   const ctxC = await browser.newContext(phone);
   await stub(ctxC);
   const Cp = await ctxC.newPage();
-  Cp.on('pageerror', e => { console.log('pageerror(C):', e.message); failures++; });
+  watch(Cp, 'C');
   await Cp.goto(`${APP}#join=carol/old&api=${encodeURIComponent(`http://localhost:${API_PORT + 1}`)}`);
+  await Cp.click('#tokenBox summary');
   await Cp.fill('input[name=token]', 'tok-carol');
   await Cp.click('#connectForm button[type=submit]');
   await Cp.waitForSelector('#content .tile');
@@ -360,8 +455,8 @@ try {
   await Cp.click('[data-v=like]');
   await Cp.evaluate(() => window.__moa.flush());
   await Cp.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 30000 });
-  const lp = legacy.api.paths();
-  ok(!lp.includes('index.json') && lp.includes('album.json') && lp.includes('index/2025-03.json') && readIndex(legacy.api).photos.x1.likes?.includes('carol'), 'first edit migrates index.json → album.json + monthly shards');
+  const lp = LR.paths();
+  ok(!lp.includes('index.json') && lp.includes('album.json') && lp.includes('index/2025-03.json') && readIndex(LR).photos.x1.likes?.includes('carol'), 'first edit migrates index.json → album.json + monthly shards');
   await Cp.click('[data-v=close]');
   // the repository is now 100 KB short of 10 GB, so this photo tips it over
   await Cp.evaluate(kb => { window.__moa.S.repoInfo.size = kb; }, 10 * 1024 * 1024 - 100);

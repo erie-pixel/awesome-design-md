@@ -284,6 +284,42 @@ export class Repo {
     if (!('caches' in globalThis)) return;
     try { await (await caches.open(MEDIA_CACHE)).put(this.cacheKey(path), new Response(blob)); } catch { /* quota */ }
   }
+
+  // ---------- sharing ----------
+
+  /** Invite a GitHub user with write access. Returns the invitation, or null if already a collaborator. */
+  invite(username) { return this.req('PUT', `/collaborators/${encodeURIComponent(username)}`, { body: { permission: 'push' } }); }
+  collaborators() { return this.req('GET', '/collaborators?per_page=100'); }
+  pendingInvites() { return this.req('GET', '/invitations?per_page=100'); }
+  cancelInvite(id) { return this.req('DELETE', `/invitations/${id}`); }
+}
+
+export const ALBUM_TOPIC = 'moa-album';
+
+/** Account-level calls for a signed-in user (no particular repository). */
+export class Account {
+  constructor(token, api) {
+    this.r = new Repo({ owner: '-', repo: '-', token, api });
+    this.api = this.r.api;
+  }
+  req(method, path, opts) { return this.r.req(method, this.api + path, opts); }
+  user() { return this.req('GET', '/user'); }
+
+  /** Repositories this user can open that are Moa albums (tagged with the topic). */
+  async albums() {
+    const list = await this.req('GET', '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member');
+    return list.filter(r => (r.topics || []).includes(ALBUM_TOPIC));
+  }
+
+  /** A new private repository for an album, tagged so it can be found again. */
+  async createAlbumRepo(name, title) {
+    const r = await this.req('POST', '/user/repos', { body: { name, description: `${title} — Moa 공유앨범`, private: true, has_issues: false, has_projects: false, has_wiki: false } });
+    await this.req('PUT', `/repos/${r.owner.login}/${r.name}/topics`, { body: { names: [ALBUM_TOPIC] } }).catch(() => {});
+    return r;
+  }
+
+  invitations() { return this.req('GET', '/user/repository_invitations?per_page=100'); }
+  accept(id) { return this.req('PATCH', `/user/repository_invitations/${id}`); }
 }
 
 export async function clearMediaCache() {

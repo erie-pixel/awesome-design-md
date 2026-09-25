@@ -6,7 +6,7 @@
    ============================================================ */
 
 import * as C from './core.js';
-import { Repo, blobToBase64, clearMediaCache } from './github.js';
+import { Repo, Account, blobToBase64, clearMediaCache } from './github.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
@@ -27,7 +27,7 @@ const ICON = {
 
 // ---------------- persistence ----------------
 
-const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', pending: id => 'moa.pending.' + id };
+const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id };
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
@@ -35,6 +35,7 @@ const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: t
 
 const S = {
   spaces: load(LS.spaces, []),
+  auth: load(LS.auth, null), loginAvailable: false, authApi: 'https://api.github.com', initTitle: null,
   space: null, gh: null, me: null, canWrite: true, repoInfo: null,
   index: null, head: null, base: null, pending: [],
   tab: 'photos', album: null,
@@ -195,13 +196,15 @@ function observeThumbs(root) {
 // boot & spaces
 // ============================================================
 
-function parseJoin() {
-  const m = /[#&]join=([^&]+)/.exec(location.hash);
-  if (!m) return null;
-  const [owner, repo] = decodeURIComponent(m[1]).split('/');
-  const api = /[#&]api=([^&]+)/.exec(location.hash);
-  const by = /[#&]by=([^&]+)/.exec(location.hash);
-  return owner && repo ? { owner, repo, api: api && decodeURIComponent(api[1]), by: by && decodeURIComponent(by[1]) } : null;
+function parseHash() {
+  const h = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const out = { auth: h.get('auth'), authError: h.get('auth_error'), join: null };
+  const j = h.get('join');
+  if (j) {
+    const [owner, repo] = j.split('/');
+    if (owner && repo) out.join = { owner, repo, api: h.get('api'), by: h.get('by') };
+  }
+  return out;
 }
 
 function parseRepo(s) {
@@ -210,52 +213,125 @@ function parseRepo(s) {
   return owner && repo ? { owner, repo } : null;
 }
 
+const sameRepo = (a, b) => a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
+const tokenFor = sp => sp.token || S.auth?.token || '';
+const loginApi = () => (S.authApi && S.authApi !== 'https://api.github.com' ? S.authApi : null);
+const account = () => new Account(S.auth.token, S.authApi);
+
+/** Is "GitHub로 로그인" available? Only when the /api functions are deployed and configured. */
+async function loadAuthConfig() {
+  try {
+    const r = await fetch('api/auth/config', { cache: 'no-store' });
+    const j = r.ok ? await r.json() : null;
+    S.loginAvailable = !!j?.login;
+    S.authApi = j?.api || 'https://api.github.com';
+  } catch { S.loginAvailable = false; }
+}
+
+function spaceFromRepo(r) {
+  const sp = { id: r.full_name.toLowerCase(), owner: r.owner.login, repo: r.name, branch: r.default_branch || null, api: loginApi(), title: r.description?.replace(/ — Moa 공유앨범$/, '') || r.name };
+  const known = S.spaces.find(x => sameRepo(x, sp) && !x.token);
+  if (known) return Object.assign(known, { branch: sp.branch || known.branch, title: sp.title });
+  S.spaces.push(sp);
+  saveSpaces();
+  return sp;
+}
+
 async function boot() {
   registerSW();
-  const join = parseJoin();
+  const h = parseHash();
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  await loadAuthConfig();
+  if (h.auth) {
+    S.auth = { token: h.auth };
+    save(LS.auth, S.auth);
+  }
+  let join = h.join;
+  try { join ||= JSON.parse(sessionStorage.getItem('moa.join') || 'null'); sessionStorage.removeItem('moa.join'); } catch { /* private mode */ }
+  if (h.authError) toast(h.authError === 'access_denied' ? 'GitHub 로그인을 취소했어요' : `GitHub 로그인 실패 (${h.authError})`, 4000);
+
+  if (S.auth) {
+    try {
+      const me = await account().user();
+      Object.assign(S.auth, { login: me.login, avatar: me.avatar_url, name: me.name || '' });
+      save(LS.auth, S.auth);
+    } catch (e) {
+      if (e.status === 401) { signedOut('로그인이 만료됐어요. 다시 로그인해 주세요'); return; }
+    }
+  }
   if (join) {
-    const known = S.spaces.find(s => s.owner.toLowerCase() === join.owner.toLowerCase() && s.repo.toLowerCase() === join.repo.toLowerCase());
-    history.replaceState(null, '', location.pathname + location.search);
+    const known = S.spaces.find(sp => sameRepo(sp, join) && tokenFor(sp));
     if (known) return openSpace(known);
+    if (S.auth) return showHome({ join });
     return showWelcome({ join });
   }
-  const sp = S.spaces.find(s => s.id === load(LS.current, null)) || S.spaces[0];
-  if (!sp) return showWelcome();
-  openSpace(sp);
+  const sp = S.spaces.find(x => x.id === load(LS.current, null) && tokenFor(x)) || S.spaces.find(x => tokenFor(x));
+  if (sp) return openSpace(sp);
+  if (S.auth) return showHome();
+  showWelcome();
 }
+
+function signedOut(msg) {
+  S.auth = null;
+  localStorage.removeItem(LS.auth);
+  if (msg) toast(msg, 4000);
+  showWelcome();
+}
+
+async function logout() {
+  if (!confirm('로그아웃할까요? 이 기기에 저장된 사진 캐시도 지워요.')) return;
+  const token = S.auth?.token;
+  fetch('api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) }).catch(() => {});
+  for (const sp of S.spaces.filter(x => !x.token)) localStorage.removeItem(LS.pending(sp.id));
+  S.spaces = S.spaces.filter(x => x.token);
+  saveSpaces();
+  S.space = null; S.gh = null; S.index = null;
+  await clearMediaCache().catch(() => {});
+  urls.clear(); resolved.clear();
+  signedOut('로그아웃했어요');
+}
+
+const MOSAIC = ['#ff9f0a', '#ff375f', '#bf5af2', '#0a84ff', '#30d158', '#ffd60a', '#64d2ff', '#ff6961', '#5e5ce6', '#ffb340', '#34c759', '#ff2d55', '#af52de', '#007aff', '#ffcc00', '#5ac8fa'];
+const GITHUB_MARK = '<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
 
 function showWelcome({ join, adding } = {}) {
   $('#shell').hidden = true;
   const w = $('#welcome');
   w.hidden = false;
-  const colors = ['#ff9f0a', '#ff375f', '#bf5af2', '#0a84ff', '#30d158', '#ffd60a', '#64d2ff', '#ff6961', '#5e5ce6', '#ffb340', '#34c759', '#ff2d55', '#af52de', '#007aff', '#ffcc00', '#5ac8fa'];
+  window.scrollTo(0, 0);
+  const login = S.loginAvailable && !S.auth;
   w.innerHTML = `<div class="card">
-    <div class="mosaic" aria-hidden="true">${colors.map((c, i) => `<i style="background:${c};animation-delay:${i * 35}ms"></i>`).join('')}</div>
+    <div class="mosaic" aria-hidden="true">${MOSAIC.map((c, i) => `<i style="background:${c};animation-delay:${i * 35}ms"></i>`).join('')}</div>
     <h1>Moa</h1>
-    <p class="lead">GitHub 저장소를 사진 클라우드로.<br>친구와 함께 채우는 공유앨범.</p>
-    ${join ? `<div class="invite-banner">📮 ${join.by ? `<b>@${esc(join.by)}</b>님이 ` : ''}<b>${esc(join.owner)}/${esc(join.repo)}</b> 앨범에 초대했어요. 초대를 수락한 GitHub 계정의 토큰으로 연결하세요.</div>` : ''}
-    <form id="connectForm" autocomplete="off">
+    <p class="lead">친구와 함께 채우는 공유앨범.<br>사진은 내 GitHub 비공개 저장소에.</p>
+    ${join ? `<div class="invite-banner">📮 ${join.by ? `<b>@${esc(join.by)}</b>님이 ` : ''}<b>${esc(join.owner)}/${esc(join.repo)}</b> 앨범에 초대했어요. ${login ? 'GitHub로 로그인하면 바로 열 수 있어요.' : '초대를 수락한 GitHub 계정의 토큰으로 연결하세요.'}</div>` : ''}
+    ${login ? `<button class="btn btn-github btn-block" id="loginBtn">${GITHUB_MARK}GitHub로 시작하기</button>
+      <p class="note" style="margin:12px 4px 0;padding:0">GitHub 계정만 있으면 돼요 (없으면 무료 가입). 앨범마다 내 계정에 비공개 저장소가 만들어지고, 사진은 이 앱 서버를 거치지 않고 GitHub로 바로 가요. GitHub가 <b>비공개 저장소 권한</b>을 물어보는데, 앨범 저장소를 만들고 친구를 초대하는 데 필요해요. 로그아웃하면 권한도 취소돼요.</p>` : ''}
+    <details class="guide" id="tokenBox"${login ? '' : ' open'}><summary>${login ? '토큰으로 직접 연결 (고급)' : '저장소 연결'}</summary>
+    <form id="connectForm" autocomplete="off" style="padding:4px 16px 16px">
       <label class="field"><span>GitHub 저장소</span><input name="repo" placeholder="아이디/저장소이름" value="${join ? esc(join.owner + '/' + join.repo) : ''}" required autocapitalize="off" spellcheck="false"></label>
       <label class="field"><span>액세스 토큰</span><input name="token" type="password" placeholder="github_pat_…" required autocapitalize="off" spellcheck="false"><small>토큰은 이 기기의 브라우저에만 저장되고 GitHub 말고는 어디에도 보내지 않아요.</small></label>
       <details class="field"><summary style="cursor:pointer;color:var(--muted);font-size:13px;margin:0 4px 8px">고급 설정</summary>
         <label class="field"><span>브랜치 (비우면 기본 브랜치)</span><input name="branch" placeholder="main"></label>
         <label class="field"><span>API 주소 (GitHub Enterprise)</span><input name="api" placeholder="https://api.github.com" value="${join?.api ? esc(join.api) : ''}"></label>
       </details>
-      <button class="btn btn-primary btn-block" type="submit">연결하기</button>
+      <button class="btn ${login ? 'btn-quiet' : 'btn-primary'} btn-block" type="submit">연결하기</button>
       <p class="err" id="connectErr" hidden></p>
-    </form>
-    <details class="guide"${S.spaces.length ? '' : ' open'}><summary>처음이라면 — 3분 설정</summary>
-      <ol class="steps">
-        <li><a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>에서 <b>Private</b> 저장소를 하나 만드세요 (예: <code>our-photos</code>). 비어 있어도 괜찮아요.</li>
-        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained 토큰 만들기</a> → Repository access: <b>Only select repositories</b>에서 그 저장소 선택 → Permissions → <b>Contents: Read and write</b> → 생성.</li>
-        <li>위에 <code>아이디/저장소이름</code>과 토큰을 붙여넣고 연결하면 끝. 친구 초대는 연결 후 <b>공유·설정</b> 탭에서.</li>
+      <ol class="steps" style="padding:14px 4px 0 22px">
+        <li><a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>에서 <b>Private</b> 저장소 만들기</li>
+        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained 토큰</a> → 그 저장소만 선택 → <b>Contents: Read and write</b></li>
+        <li>위에 붙여넣고 연결</li>
       </ol>
-      <p class="note" style="margin:0 0 12px">친구의 <b>개인 계정</b> 저장소에 협업자로 참여하는 경우, fine-grained 토큰이 그 저장소를 고를 수 없으면 <b>classic 토큰</b>(<code>repo</code> 권한)을 쓰거나, 저장소를 GitHub 조직(Organization)으로 옮기세요.</p>
+    </form>
     </details>
-    ${adding || S.spaces.length ? '<button class="btn btn-quiet btn-block" id="welcomeCancel" style="margin-top:12px" type="button">취소</button>' : ''}
+    ${adding || S.space ? '<button class="btn btn-quiet btn-block" id="welcomeCancel" style="margin-top:12px" type="button">취소</button>' : ''}
   </div>`;
+  $('#loginBtn')?.addEventListener('click', () => {
+    try { if (join) sessionStorage.setItem('moa.join', JSON.stringify(join)); } catch { /* private mode */ }
+    location.href = 'api/auth/login';
+  });
   const form = $('#connectForm');
-  if (join) setTimeout(() => form.token.focus(), 50);
+  if (join && !login) setTimeout(() => form.token.focus(), 50);
   $('#welcomeCancel')?.addEventListener('click', () => { w.hidden = true; if (S.space) { $('#shell').hidden = false; } else boot(); });
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -284,10 +360,112 @@ function showWelcome({ join, adding } = {}) {
   });
 }
 
-async function openSpace(sp) {
+// ---------------- signed-in home: my albums, invitations, new album ----------------
+
+async function showHome({ join } = {}) {
+  $('#shell').hidden = true;
+  const w = $('#welcome');
+  w.hidden = false;
+  window.scrollTo(0, 0);
+  const a = S.auth;
+  w.innerHTML = `<div class="card home">
+    <div class="me"><img class="avatar" alt="" src="${esc(a.avatar || avatar(a.login || 'ghost'))}"><div class="grow"><b>${esc(a.name || '@' + (a.login || ''))}</b><small>@${esc(a.login || '')} · GitHub로 로그인됨</small></div><button class="text-btn" id="logoutBtn">로그아웃</button></div>
+    <h1>앨범</h1>
+    <div id="homeJoin"></div>
+    <div id="homeInvites"></div>
+    <div class="panel home-list" id="homeAlbums"><div class="row"><div class="grow"><small>불러오는 중…</small></div></div></div>
+    <button class="btn btn-primary btn-block" id="newRepoBtn">새 앨범 만들기</button>
+    <p class="note" style="margin:12px 4px 0;padding:0">앨범마다 내 GitHub 계정에 비공개 저장소가 하나씩 생겨요. 친구는 앨범 안의 <b>공유·설정 → 친구 초대</b>에서 GitHub 아이디로 초대해요.</p>
+    ${S.space ? '<button class="btn btn-quiet btn-block" id="homeBack" style="margin-top:12px">돌아가기</button>' : ''}
+  </div>`;
+  $('#logoutBtn').onclick = logout;
+  $('#newRepoBtn').onclick = newAlbumRepo;
+  $('#homeBack')?.addEventListener('click', () => { w.hidden = true; $('#shell').hidden = false; });
+  let albums = [], invites = [];
+  try {
+    [albums, invites] = await Promise.all([account().albums(), account().invitations().catch(() => [])]);
+  } catch (e) {
+    if (e.status === 401) return signedOut('로그인이 만료됐어요. 다시 로그인해 주세요');
+    $('#homeAlbums').innerHTML = `<div class="row"><div class="grow"><b>앨범 목록을 못 불러왔어요</b><small>${esc(errMsg(e))}</small></div></div>`;
+    return;
+  }
+  if ($('#welcome').hidden || !$('#homeAlbums')) return;
+  const tokenSpaces = S.spaces.filter(x => x.token && !albums.some(r => sameRepo(x, { owner: r.owner.login, repo: r.name })));
+  const inviteFor = j => invites.find(i => sameRepo({ owner: i.repository.owner.login, repo: i.repository.name }, j));
+  if (join) {
+    const has = albums.find(r => sameRepo({ owner: r.owner.login, repo: r.name }, join));
+    if (has) return openSpace(spaceFromRepo(has));
+    if (!inviteFor(join)) $('#homeJoin').innerHTML = `<div class="invite-banner">📮 <b>${esc(join.owner)}/${esc(join.repo)}</b> 초대가 아직 도착하지 않았어요. ${join.by ? `@${esc(join.by)}` : '앨범 주인'}님께 내 GitHub 아이디 <b>@${esc(a.login)}</b>를 알려주면 바로 초대받을 수 있어요.</div>`;
+  }
+  $('#homeInvites').innerHTML = invites.length ? `<h2 class="section-title" style="margin:0 0 10px">받은 초대</h2><div class="panel">${invites.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.inviter?.avatar_url || avatar(i.inviter?.login || 'ghost'))}"><div class="grow"><b>${esc(i.repository.description?.replace(/ — Moa 공유앨범$/, '') || i.repository.name)}</b><small>@${esc(i.inviter?.login || '')}님이 초대 · ${esc(i.repository.full_name)}</small></div><button class="btn btn-primary btn-sm" data-accept="${i.id}">수락</button></div>`).join('')}</div>` : '';
+  const rows = [
+    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}"></span><span class="grow"><b>${esc(r.description?.replace(/ — Moa 공유앨범$/, '') || r.name)}</b><small>${esc(r.full_name)}${r.owner.login !== a.login ? ` · @${esc(r.owner.login)}님의 앨범` : ''}${r.private ? '' : ' · ⚠️ 공개'}</small></span><span class="val">›</span></button>`),
+    ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>토큰으로 연결</small></span><span class="val">›</span></button>`),
+  ];
+  $('#homeAlbums').innerHTML = rows.join('') || '<div class="row"><div class="grow"><b>아직 앨범이 없어요</b><small>새 앨범을 만들거나 친구의 초대를 기다려 보세요</small></div></div>';
+  w.onclick = async e => {
+    const acc = e.target.closest('[data-accept]');
+    const repo = e.target.closest('[data-repo]');
+    const tsp = e.target.closest('[data-space]');
+    if (acc) {
+      acc.disabled = true; acc.textContent = '수락 중…';
+      const inv = invites.find(i => String(i.id) === acc.dataset.accept);
+      try {
+        await account().accept(inv.id);
+        toast(`'${inv.repository.name}' 앨범에 참여했어요`);
+        openSpace(spaceFromRepo(inv.repository));
+      } catch (ex) { acc.disabled = false; acc.textContent = '수락'; toast(errMsg(ex), 4000); }
+    } else if (repo) {
+      openSpace(spaceFromRepo(albums.find(r => r.full_name === repo.dataset.repo)));
+    } else if (tsp) {
+      openSpace(S.spaces.find(x => x.id === tsp.dataset.space));
+    }
+  };
+}
+
+function repoSlug(title) {
+  const ascii = title.normalize('NFKD').replace(/[^\w\s-]/g, '').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const d = new Date();
+  return 'moa-' + (ascii.length >= 3 ? ascii.slice(0, 40) : `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
+}
+
+function newAlbumRepo() {
+  const sh = openSheet(`<h2>새 앨범</h2>
+    <label class="field"><span>앨범 이름</span><input id="nrTitle" placeholder="예: 2026 제주 여행" maxlength="60"></label>
+    <label class="field"><span>GitHub 저장소 이름</span><input id="nrName" autocapitalize="off" spellcheck="false" maxlength="100"><small>내 계정(@${esc(S.auth.login || '')})에 <b>비공개</b>로 만들어져요. 영문·숫자·-만 쓸 수 있어요.</small></label>
+    <p class="err" id="nrErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>취소</button><button class="btn btn-primary" id="nrOk">만들기</button></div>`);
+  const t = $('#nrTitle', sh), n = $('#nrName', sh);
+  let touched = false;
+  n.value = repoSlug('');
+  t.oninput = () => { if (!touched) n.value = repoSlug(t.value); };
+  n.oninput = () => { touched = true; };
+  setTimeout(() => t.focus(), 50);
+  $('#nrOk', sh).onclick = async () => {
+    const title = t.value.trim() || '우리 앨범';
+    const name = n.value.trim();
+    const err = $('#nrErr', sh);
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) { err.textContent = '저장소 이름은 영문, 숫자, -, _, . 만 쓸 수 있어요'; err.hidden = false; return; }
+    const btn = $('#nrOk', sh);
+    btn.disabled = true; btn.textContent = '만드는 중…';
+    try {
+      const r = await account().createAlbumRepo(name, title);
+      closeSheet();
+      openSpace(spaceFromRepo(r), { initTitle: title });
+    } catch (e) {
+      err.textContent = e.status === 422 ? '이미 같은 이름의 저장소가 있어요. 다른 이름을 써주세요' : errMsg(e);
+      err.hidden = false;
+      btn.disabled = false; btn.textContent = '만들기';
+    }
+  };
+}
+
+async function openSpace(sp, { initTitle } = {}) {
+  if (!tokenFor(sp)) return S.loginAvailable ? showWelcome() : showWelcome({ join: sp });
   S.space = sp;
   save(LS.current, sp.id);
-  S.gh = new Repo(sp);
+  S.gh = new Repo({ ...sp, token: tokenFor(sp) });
+  S.initTitle = initTitle || null;
   S.gh.onWait = s => toast(`GitHub 요청 한도에 걸려 ${s}초 기다리는 중…`, 5000);
   // GitHub recommends ≤ 6 pushes/minute per repository; the client paces itself
   S.gh.onThrottle = s => { setSync('throttle', s); if (!S.throttleToast) { S.throttleToast = true; toast('GitHub 권장 저장 속도(분당 6회)에 맞춰 잠시 쉬었다 저장해요', 3500); } };
@@ -298,7 +476,7 @@ async function openSpace(sp) {
   setSelecting(false);
   $('#welcome').hidden = true;
   $('#shell').hidden = false;
-  $('#spaceName').textContent = sp.repo;
+  $('#spaceName').textContent = sp.title || sp.repo;
   $('#content').innerHTML = '<div class="empty"><p>앨범을 불러오는 중…</p></div>';
   $('#hero').innerHTML = '';
   showTab('photos', false);
@@ -316,10 +494,11 @@ async function openSpace(sp) {
   } catch (e) {
     if (S.space !== sp) return;
     setSync('error');
+    if (e.status === 401 && !sp.token) return signedOut('로그인이 만료됐어요. 다시 로그인해 주세요');
     if (e.status === 0 && await loadOfflineIndex()) { toast('오프라인 — 마지막으로 불러온 앨범을 보여줘요'); return; }
-    $('#content').innerHTML = `<div class="empty"><h2>연결할 수 없어요</h2><p>${esc(errMsg(e))}</p><button class="btn btn-primary" id="retryBtn">다시 시도</button> <button class="btn btn-quiet" id="reconnectBtn">토큰 다시 입력</button></div>`;
+    $('#content').innerHTML = `<div class="empty"><h2>열 수 없어요</h2><p>${esc(errMsg(e))}</p><button class="btn btn-primary" id="retryBtn">다시 시도</button> <button class="btn btn-quiet" id="reconnectBtn">${sp.token ? '토큰 다시 입력' : '앨범 목록'}</button></div>`;
     $('#retryBtn').onclick = () => openSpace(sp);
-    $('#reconnectBtn').onclick = () => showWelcome({ join: { owner: sp.owner, repo: sp.repo, api: sp.api }, adding: true });
+    $('#reconnectBtn').onclick = () => (sp.token ? showWelcome({ join: { owner: sp.owner, repo: sp.repo, api: sp.api }, adding: true }) : showHome());
   }
 }
 
@@ -478,13 +657,14 @@ function renderInit(empty) {
   }
   c.innerHTML = `<div class="empty">
     <h2>${empty ? '비어 있는 저장소예요' : '이 저장소에 앨범을 만들까요?'}</h2>
-    <p><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b>에 Moa 앨범을 시작합니다. 사진은 이 저장소에 파일로 저장되고, 앨범 정보는 <code>index.json</code> 하나에 담겨요.</p>
-    <div style="max-width:340px;margin:0 auto"><label class="field"><span>앨범 이름</span><input id="initTitle" value="${esc(S.repoInfo?.description || '우리 앨범')}"></label>
+    <p><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b>에 Moa 앨범을 시작합니다. 사진은 이 저장소에 파일로 저장되고, 앨범 정보는 <code>album.json</code>과 월별 <code>index/</code> 파일에 담겨요.</p>
+    <div style="max-width:340px;margin:0 auto"><label class="field"><span>앨범 이름</span><input id="initTitle" value="${esc(S.initTitle || S.repoInfo?.description?.replace(/ — Moa 공유앨범$/, '') || '우리 앨범')}"></label>
     <button class="btn btn-primary btn-block" id="initBtn">앨범 만들기</button></div></div>`;
   $('#initBtn').onclick = () => serial(async () => {
     const btn = $('#initBtn');
     btn.disabled = true; btn.textContent = '만드는 중…';
     const title = $('#initTitle').value.trim() || '우리 앨범';
+    S.initTitle = null;
     try {
       if (empty) await S.gh.seed('README.md', repoReadme(title), 'Moa 앨범 시작');
       const r = await S.gh.commit({ ops: [{ op: 'setTitle', title }, { op: 'join', user: S.me.login, at: new Date().toISOString() }], message: `Moa: 앨범 만들기 — @${S.me.login}`, title });
@@ -496,6 +676,8 @@ function renderInit(empty) {
       toast(errMsg(e), 4000);
     }
   });
+  // an album repo we just created: no need to ask for the name twice
+  if (S.initTitle) $('#initBtn').click();
 }
 
 function repoReadme(title) {
@@ -819,7 +1001,7 @@ function renderSettings() {
   t.innerHTML = `<div class="hero"><div><h1>공유·설정</h1><p>${esc(S.index.title || '')}</p></div></div>
     <h2 class="section-title">함께하는 사람</h2>
     <div class="panel">
-      ${members.map(([login, m]) => `<div class="row"><img class="avatar" alt="" src="${avatar(login)}" loading="lazy" onerror="this.style.visibility='hidden'"><div class="grow"><b>@${esc(login)}${login === S.me?.login ? ' (나)' : ''}</b><small>사진 ${counts[login] || 0}장 · ${fmtDate(m.joinedAt)} 참여</small></div></div>`).join('')}
+      ${members.map(([login, m]) => `<div class="row"><img class="avatar" alt="" src="${avatar(login)}" loading="lazy"><div class="grow"><b>@${esc(login)}${login === S.me?.login ? ' (나)' : ''}</b><small>사진 ${counts[login] || 0}장 · ${fmtDate(m.joinedAt)} 참여</small></div></div>`).join('')}
       <button class="row" style="width:100%" data-act="invite"><span class="grow" style="text-align:left;color:var(--primary)">+ 친구 초대하기</span></button>
     </div>
     <h2 class="section-title">이 앨범 저장소</h2>
@@ -839,7 +1021,8 @@ function renderSettings() {
     <h2 class="section-title">다른 앨범 저장소</h2>
     <div class="panel">
       ${S.spaces.map(s => `<div class="row"><button class="grow" data-space="${esc(s.id)}"><b>${esc(s.owner)}/${esc(s.repo)}</b><small>${s.id === S.space.id ? '<span class="tick">사용 중</span>' : '눌러서 전환'}</small></button><button class="text-btn danger" data-unlink="${esc(s.id)}">연결 해제</button></div>`).join('')}
-      <button class="row" style="width:100%" data-act="addSpace"><span class="grow" style="text-align:left;color:var(--primary)">+ 저장소 추가</span></button>
+      ${S.auth ? '<button class="row row-btn" data-act="home"><span class="grow" style="color:var(--primary)">모든 앨범 · 새 앨범 · 받은 초대</span></button>' : ''}
+      <button class="row" style="width:100%" data-act="addSpace"><span class="grow" style="text-align:left;color:var(--primary)">+ 토큰으로 저장소 연결</span></button>
     </div>
     <h2 class="section-title">옵션</h2>
     <div class="panel">
@@ -848,7 +1031,9 @@ function renderSettings() {
       ${sw('geocode', '장소 이름 자동으로 찾기', 'GPS 좌표를 OpenStreetMap으로 보내 동네 이름을 받아와요')}
       <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>이 기기의 사진 캐시 비우기</b><small>저장소의 사진은 그대로예요</small></span></button>
     </div>
-    <p class="note">@${esc(S.me?.login || '')}로 연결됨 · 토큰은 이 브라우저에만 저장돼요. 공용 기기라면 사용 후 연결 해제하세요.</p>`;
+    <h2 class="section-title">계정</h2>
+    <div class="panel"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b><small>${S.space.token ? '토큰으로 연결된 저장소' : 'GitHub로 로그인됨'}</small></div>${S.auth ? '<button class="text-btn danger" data-act="logout">로그아웃</button>' : ''}</div></div>
+    <p class="note">로그인 정보는 이 브라우저에만 저장돼요. 공용 기기라면 사용 후 로그아웃하세요. GitHub의 Settings → Applications에서 언제든 권한을 해제할 수 있어요.</p>`;
   // draw the ring from empty once it's on screen
   requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', t).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
 }
@@ -856,16 +1041,48 @@ function renderSettings() {
 function inviteSheet() {
   const base = location.origin + location.pathname;
   const link = `${base}#join=${encodeURIComponent(S.space.owner + '/' + S.space.repo)}${S.space.api ? '&api=' + encodeURIComponent(S.space.api) : ''}${S.me?.login ? '&by=' + encodeURIComponent(S.me.login) : ''}`;
-  const repoUrl = S.gh.webUrl;
   const sh = openSheet(`<h2>친구 초대</h2>
-    <ol class="steps" style="padding-left:20px">
-      <li>${repoUrl ? `<a href="${repoUrl}/settings/access" target="_blank" rel="noopener">저장소 Settings → Collaborators</a>` : '저장소 설정의 Collaborators'}에서 친구의 GitHub 아이디를 추가하세요. (저장소 주인만 할 수 있어요)</li>
-      <li>친구가 GitHub 초대 메일을 <b>수락</b>하면,</li>
-      <li>아래 링크를 보내주세요. 친구는 링크를 열고 자기 토큰으로 연결하면 같은 앨범을 함께 써요.</li>
-    </ol>
-    <label class="field"><span>초대 링크</span><input readonly value="${esc(link)}" id="inviteLink"></label>
-    <div class="actions"><button class="btn btn-quiet" id="copyLink">링크 복사</button>${navigator.share ? '<button class="btn btn-primary" id="shareLink">공유하기</button>' : ''}</div>
-    <p class="note" style="margin:14px 0 0;padding:0">친구 토큰: 저장소가 <b>조직(Organization)</b>에 있으면 fine-grained 토큰(해당 저장소, Contents 읽기/쓰기)을, <b>개인 계정</b> 저장소면 classic 토큰(<code>repo</code>)이 필요할 수 있어요. 보기만 할 친구는 Read 권한으로 초대하세요.</p>`);
+    <label class="field"><span>친구의 GitHub 아이디</span><input id="invUser" placeholder="예: octocat" autocapitalize="off" spellcheck="false" enterkeyhint="send"></label>
+    <button class="btn btn-primary btn-block" id="invSend">초대 보내기</button>
+    <p class="note" style="margin:10px 4px 0;padding:0">친구가 이 앱에 GitHub로 로그인하면 초대가 보이고, <b>수락</b> 한 번이면 같은 앨범을 함께 써요. GitHub 계정이 없다면 github.com에서 무료로 가입하면 돼요.</p>
+    <h2 style="font-size:17px;margin:22px 0 6px">함께하는 사람</h2>
+    <div id="invList"><p class="note" style="margin:0;padding:0">불러오는 중…</p></div>
+    <details class="guide" style="margin-top:16px"><summary>초대 링크 보내기</summary><div style="padding:0 16px 14px">
+      <label class="field"><span>친구가 이 링크로 들어와 로그인하면 이 앨범이 바로 열려요 (초대는 위에서 먼저 보내야 해요)</span><input readonly value="${esc(link)}" id="inviteLink"></label>
+      <div class="actions" style="margin-top:4px"><button class="btn btn-quiet" id="copyLink">링크 복사</button>${navigator.share ? '<button class="btn btn-quiet" id="shareLink">공유하기</button>' : ''}</div></div></details>`);
+  const list = async () => {
+    const [col, inv] = await Promise.allSettled([S.gh.collaborators(), S.gh.pendingInvites()]);
+    const people = col.status === 'fulfilled' ? col.value : [];
+    const pending = inv.status === 'fulfilled' ? inv.value : [];
+    const box = $('#invList', sh);
+    if (!box) return;
+    box.innerHTML = `<div class="panel" style="margin:0">${[
+      ...people.map(u => `<div class="row"><img class="avatar" alt="" src="${esc(u.avatar_url || avatar(u.login))}"><div class="grow"><b>@${esc(u.login)}${u.login === S.me?.login ? ' (나)' : ''}</b><small>${u.login === S.space.owner ? '앨범 주인' : u.permissions?.push ? '올리기·편집 가능' : '보기만 가능'}</small></div></div>`),
+      ...pending.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.invitee?.avatar_url || avatar(i.invitee?.login || 'ghost'))}"><div class="grow"><b>@${esc(i.invitee?.login || '')}</b><small>초대 수락 대기 중</small></div><button class="text-btn danger" data-cancel="${i.id}">취소</button></div>`),
+    ].join('') || '<div class="row"><div class="grow"><small>목록을 볼 권한이 없어요 (저장소 주인만 볼 수 있어요)</small></div></div>'}</div>`;
+  };
+  list();
+  const send = async () => {
+    const u = $('#invUser', sh).value.trim().replace(/^@/, '');
+    if (!/^[A-Za-z0-9-]{1,39}$/.test(u)) return toast('GitHub 아이디를 확인해 주세요');
+    const btn = $('#invSend', sh);
+    btn.disabled = true; btn.textContent = '보내는 중…';
+    try {
+      const r = await S.gh.invite(u);
+      toast(r ? `@${u}님에게 초대를 보냈어요` : `@${u}님은 이미 함께하고 있어요`);
+      $('#invUser', sh).value = '';
+      list();
+    } catch (e) {
+      toast(e.status === 404 ? `@${u} — 그런 GitHub 아이디가 없어요` : e.status === 403 ? '저장소 주인만 친구를 초대할 수 있어요' : errMsg(e), 4000);
+    } finally { btn.disabled = false; btn.textContent = '초대 보내기'; }
+  };
+  $('#invSend', sh).onclick = send;
+  $('#invUser', sh).onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) send(); };
+  sh.addEventListener('click', async e => {
+    const c = e.target.closest('[data-cancel]');
+    if (!c) return;
+    try { await S.gh.cancelInvite(c.dataset.cancel); list(); } catch (ex) { toast(errMsg(ex)); }
+  });
   $('#copyLink', sh).onclick = async () => {
     try { await navigator.clipboard.writeText(link); toast('링크를 복사했어요'); } catch { $('#inviteLink', sh).select(); document.execCommand('copy'); toast('링크를 복사했어요'); }
   };
@@ -873,12 +1090,15 @@ function inviteSheet() {
 }
 
 function spaceSheet() {
-  const sh = openSheet(`<h2>앨범 저장소</h2><div>${S.spaces.map(s => `<button class="list-btn" data-space="${esc(s.id)}"><span class="grow">${esc(s.owner)}/${esc(s.repo)}<small>${s.id === S.space?.id ? '사용 중' : '전환'}</small></span>${s.id === S.space?.id ? '<span class="tick">✓</span>' : ''}</button>`).join('')}
-    <button class="list-btn" data-act="addSpace"><span class="grow" style="color:var(--primary)">+ 저장소 추가</span></button></div>`);
+  const recent = S.spaces.filter(x => tokenFor(x));
+  const sh = openSheet(`<h2>앨범</h2><div>${recent.map(s => `<button class="list-btn" data-space="${esc(s.id)}"><span class="grow">${esc(s.title || s.repo)}<small>${esc(s.owner)}/${esc(s.repo)}</small></span>${s.id === S.space?.id ? '<span class="tick">✓</span>' : ''}</button>`).join('')}
+    ${S.auth ? '<button class="list-btn" data-act="home"><span class="grow" style="color:var(--primary)">모든 앨범 · 새 앨범 · 받은 초대</span></button>' : ''}
+    <button class="list-btn" data-act="addSpace"><span class="grow" style="color:${S.auth ? 'var(--muted)' : 'var(--primary)'}">+ ${S.auth ? '토큰으로 저장소 연결' : '저장소 추가'}</span></button></div>`);
   sh.onclick = e => {
     const b = e.target.closest('[data-space],[data-act]');
     if (!b) return;
     closeSheet();
+    if (b.dataset.act === 'home') return showHome();
     if (b.dataset.act) return showWelcome({ adding: true });
     const sp = S.spaces.find(s => s.id === b.dataset.space);
     if (sp && sp.id !== S.space?.id) openSpace(sp);
@@ -1449,7 +1669,7 @@ function showUploadSheet(review) {
   const thumbs = E.slice(0, 200).map(e => {
     const m = e.main;
     e.url ||= m.kind === 'photo' ? URL.createObjectURL(m.file) : '';
-    return `<div class="up-item${e.skip ? ' skip' : ''}" id="up-${m.key}">${e.url ? `<img alt="" src="${e.url}" loading="lazy" onerror="this.remove()">` : ''}
+    return `<div class="up-item${e.skip ? ' skip' : ''}" id="up-${m.key}">${e.url ? `<img alt="" src="${e.url}" loading="lazy">` : ''}
       <div class="flags">${Math.max(m.size, e.live?.size || 0) >= LIM.LIMITS.apiUpload ? '<b class="big">대용량</b>' : ''}${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? '<b class="gps">위치</b>' : ''}</div>
       <span class="nm">${esc(m.name)}</span>${e.status ? `<span class="st${e.status === '완료' ? ' done' : e.failed ? ' fail' : ''}">${esc(e.status)}</span>` : ''}</div>`;
   }).join('');
@@ -1556,6 +1776,7 @@ async function startUpload(opts) {
       if (batch.photos.length >= 10 || batch.bytes > 50 * LIM.MB) await commitBatch();
     } catch (err) {
       console.error(e.main.name, err);
+      toast(`${e.main.name}: ${errMsg(err)}`, 4000);
       U.failed++;
       setEntryStatus(e, '실패', true);
     }
@@ -1650,6 +1871,12 @@ function bind() {
   $('#uploadBtn').onclick = () => $('#fileInput').click();
   $('#uploadFab').onclick = () => $('#fileInput').click();
   bindSheetDrag();
+  // image fallbacks without inline handlers (the CSP forbids them)
+  document.addEventListener('error', e => {
+    const t = e.target;
+    if (t.matches?.('img.avatar')) t.style.visibility = 'hidden';
+    else if (t.matches?.('.up-item img')) t.remove();
+  }, true);
   // scroll-edge hairline under the translucent bar, only once content slides beneath it
   const onScroll = () => $('.bar').classList.toggle('scrolled', window.scrollY > 4);
   window.addEventListener('scroll', onScroll, { passive: true });
@@ -1735,6 +1962,8 @@ function bind() {
       case 'invite': return inviteSheet();
       case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
+      case 'home': return showHome();
+      case 'logout': return logout();
       case 'rename': {
         const t = prompt('앨범 이름', S.index.title || '');
         if (t && t.trim()) edit({ op: 'setTitle', title: t.trim() });

@@ -2,14 +2,14 @@
    Moa — reading picked files in the browser
    Hash (dedupe), metadata (EXIF via exifr, QuickTime atoms for
    .mov/.mp4), Live Photo pairing, and JPEG preview/thumbnail
-   renditions drawn on a canvas. HEIC decodes natively on Safari;
-   other browsers lazy-load heic2any.
+   renditions drawn on a canvas. HEIC decodes natively on Safari
+   (iPhone, Mac). No third-party decoder is loaded: the page holds
+   a GitHub token, so it runs no eval-based code (see vercel.json CSP).
    ============================================================ */
 
 import { kindOf, extOf, metaFromExif, parseQuickTime, metaFromQuickTime, pairLivePhotos, tsOf, localISO, localTz } from './core.js';
 
 export const MAX_FILE = 95 * 1024 * 1024; // GitHub enforces 100 MB per object; keep headroom for the API upload
-const HEIC2ANY = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
 
 async function sha256(buf) {
   if (!crypto.subtle) return null;
@@ -73,18 +73,6 @@ export function buildEntries(items) {
 
 // ---------------- decoding ----------------
 
-let heicLib = null;
-function loadHeic2any() {
-  heicLib ||= new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = HEIC2ANY;
-    s.onload = () => resolve(globalThis.heic2any);
-    s.onerror = () => { heicLib = null; reject(new Error('HEIC 변환기를 불러오지 못했어요')); };
-    document.head.appendChild(s);
-  });
-  return heicLib;
-}
-
 function loadImg(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -101,11 +89,7 @@ async function decodeImage(file, mime) {
     return { src: bmp, w: bmp.width, h: bmp.height, done: () => bmp.close() };
   } catch { /* fall through */ }
   try { return await loadImg(file); } catch { /* fall through */ }
-  if (/hei[cf]/.test(mime) || /\.hei[cf]$/i.test(file.name)) {
-    const h2a = await loadHeic2any();
-    const jpg = await h2a({ blob: file, toType: 'image/jpeg', quality: 0.9 });
-    return loadImg(Array.isArray(jpg) ? jpg[0] : jpg);
-  }
+  if (/hei[cf]/.test(mime) || /\.hei[cf]$/i.test(file.name)) throw new Error('이 브라우저는 HEIC를 열 수 없어요 — 아이폰·맥의 Safari에서 올리거나 JPEG로 바꿔 주세요');
   throw new Error('이미지를 열 수 없어요');
 }
 

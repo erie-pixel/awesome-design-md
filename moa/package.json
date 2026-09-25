@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "npx http-server -p 8080 -c-1 .",
-    "test": "node --test test/core.test.mjs",
+    "test": "node --test test/core.test.mjs test/oauth.test.mjs",
     "e2e": "node test/e2e.mjs"
   }
 }

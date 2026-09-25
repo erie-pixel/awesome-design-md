@@ -1,7 +1,7 @@
 /* Moa service worker — app shell offline cache.
    Photos are cached by the app itself (Cache Storage "moa-media-v1");
    GitHub API calls are never intercepted here. */
-const CACHE = 'moa-shell-v2';
+const CACHE = 'moa-shell-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -37,7 +37,7 @@ self.addEventListener('activate', e => {
 // Assets: cache-first with background refresh.
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
 
   if (e.request.mode === 'navigate') {
     e.respondWith(

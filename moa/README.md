@@ -1,6 +1,6 @@
 # Moa 📸 — GitHub에 담는 친구들과의 공유앨범
 
-**비공개 GitHub 저장소를 사진 클라우드로 쓰는** 웹앱(PWA)입니다. 서버·빌드 없이 정적 파일만으로 동작하고, 아이폰 홈 화면에 앱처럼 설치할 수 있어요.
+**비공개 GitHub 저장소를 사진 클라우드로 쓰는** 웹앱(PWA)입니다. 배포해 두면 누구든 **GitHub로 로그인만 해서** 앨범을 만들고 친구를 초대해 쓸 수 있어요. 빌드 과정이 없고, 아이폰 홈 화면에 앱처럼 설치할 수 있어요.
 
 <p>
 <img src="docs/date.png" width="220" alt="날짜별 보기">
@@ -23,20 +23,39 @@
 | **동시 편집** | 모든 변경은 작은 "작업(op)"으로 기록되고, 커밋 직전에 최신 앨범 정보 위에 다시 적용돼요. 두 사람이 동시에 저장해도 서로 덮어쓰지 않아요 |
 | **용량·제한 표시** | GitHub 저장소 한도 기준으로 남은 용량(10GB 중), 이번 업로드 예상 크기, 파일·폴더·저장 속도 한도 상태를 보여주고, 넘기 전에 경고해요 |
 
-## 시작하기 (3분)
+## 쓰는 사람: 로그인만 하면 끝
 
-1. **저장소 만들기** — [github.com/new](https://github.com/new)에서 **Private** 저장소 생성 (예: `our-photos`). 비어 있어도 돼요.
-2. **토큰 만들기** — [Fine-grained token](https://github.com/settings/personal-access-tokens/new) → *Only select repositories*에서 그 저장소 → *Permissions → Contents: **Read and write*** → 생성.
-3. **앱 열기** — 배포한 Moa 주소(아래 참고)를 열고 `아이디/저장소이름`과 토큰을 입력 → **앨범 만들기**.
-4. **아이폰에 설치** — Safari에서 공유 버튼 → *홈 화면에 추가*.
+1. 배포된 Moa 주소를 열고 **GitHub로 시작하기** → GitHub에서 **Authorize** (계정이 없으면 무료 가입).
+2. **새 앨범 만들기** → 이름만 적으면 내 GitHub 계정에 비공개 저장소가 자동으로 만들어져요.
+3. 앨범의 **공유·설정 → 친구 초대하기**에 친구의 GitHub 아이디를 적고 **초대 보내기**.
+4. 친구도 Moa에 GitHub로 로그인하면 **받은 초대**가 보여요 → **수락** → 같은 앨범을 함께 써요.
+5. 아이폰에서는 Safari 공유 버튼 → *홈 화면에 추가*로 앱처럼 설치.
 
-### 친구 초대
+토큰 복사·붙여넣기, GitHub 설정 화면을 만질 필요가 없어요. (토큰으로 직접 연결하는 예전 방식도 첫 화면의 *토큰으로 직접 연결 (고급)*에 남아 있어요.)
 
-1. 저장소 **Settings → Collaborators**에서 친구 GitHub 아이디 추가 (보기만 할 친구는 Read 권한).
-2. 친구가 초대 메일 수락.
-3. 앱의 **공유·설정 → 친구 초대하기**에서 링크를 복사해 보내기. 친구는 링크를 열고 **자기 토큰**으로 연결하면 끝.
+## 배포하는 사람: 처음 한 번만 (10분)
 
-> **토큰 관련 주의** — fine-grained 토큰은 "리소스 소유자(본인 또는 조직)" 단위라서, 친구의 **개인 계정** 저장소는 선택 목록에 안 나올 수 있어요. 그럴 땐 ① 무료 GitHub **조직(Organization)** 을 만들어 저장소를 거기에 두고 멤버를 초대하거나(권장, 조직 설정에서 fine-grained 토큰 허용 필요), ② classic 토큰(`repo` 권한)을 쓰세요. classic 토큰은 본인의 모든 저장소에 접근할 수 있으니 공용 기기에서는 쓰지 마세요.
+"GitHub로 로그인"을 하려면 GitHub에 이 앱을 **OAuth App**으로 한 번 등록해야 해요. 로그인 과정에 비밀키(client secret)가 필요한데 그건 브라우저에 둘 수 없어서, `moa/api/auth/`의 작은 함수 4개가 Vercel에서 그 한 단계만 처리해요. 따로 서버를 운영하는 게 아니라 **저장소의 파일을 Vercel이 배포할 때 알아서 실행**하는 거예요.
+
+1. **Vercel에 배포** — [vercel.com/new](https://vercel.com/new)에서 이 저장소를 Import → **Root Directory: `moa`**, Framework Preset: *Other*, 빌드 명령 없음 → Deploy. 주소가 생겨요 (예: `https://moa-xxx.vercel.app`).
+2. **GitHub OAuth App 등록** — [github.com/settings/applications/new](https://github.com/settings/applications/new)
+   - Application name: `Moa` (로그인 화면에 보이는 이름)
+   - Homepage URL: `https://moa-xxx.vercel.app`
+   - Authorization callback URL: `https://moa-xxx.vercel.app/api/auth/callback`
+   - 등록 후 **Client ID**를 복사하고 **Generate a new client secret**으로 비밀키 생성·복사
+3. **Vercel 환경 변수** — Project → Settings → Environment Variables에 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` 추가 → **Redeploy**.
+
+끝이에요. 이제 주소를 아는 누구나 로그인해서 쓸 수 있어요. 사진과 앨범 정보는 **각 사용자의 GitHub 저장소**에만 저장되고 Vercel에는 아무것도 남지 않아요 (GitHub Docs가 권장하는 "사용자 데이터는 사용자 계정에" 방식).
+
+> - 콜백 주소는 한 도메인만 등록돼요. Vercel의 **미리보기(Preview) 주소에서는 로그인이 안 되고**, 위에 등록한 운영 주소에서만 돼요. 커스텀 도메인을 붙이면 OAuth App의 두 주소도 바꿔 주세요.
+> - GitHub Enterprise라면 `GITHUB_URL`, `GITHUB_API_URL`도 설정하고 `vercel.json`의 `connect-src`에 API 주소를 추가하세요.
+> - GitHub Pages처럼 함수를 못 돌리는 곳에 올리면 로그인 버튼이 자동으로 숨고, 토큰 연결 방식으로만 동작해요.
+
+### 권한과 보안
+
+- GitHub에 요청하는 권한은 **`repo`** 하나예요. 앨범용 비공개 저장소를 만들고, 친구를 초대하고, 초대를 수락하려면 이 권한이 필요해요. OAuth App에는 "이 저장소만" 같은 더 좁은 권한이 없어서, 이 권한은 **본인의 다른 비공개 저장소에도 접근할 수 있어요.** 로그인 화면에도 그렇게 표시돼요.
+- 그래서 토큰은 브라우저에만 저장하고, 서버는 토큰을 보관하지 않아요. 페이지에는 **외부 스크립트가 하나도 없고**(라이브러리는 모두 저장소에 포함), `vercel.json`의 CSP로 스크립트는 자기 도메인, 네트워크 요청은 GitHub API와 지명 검색으로만 제한해요.
+- **로그아웃**하면 GitHub 쪽 권한도 취소(revoke)되고 이 기기의 사진 캐시도 지워요. GitHub의 *Settings → Applications → Authorized OAuth Apps*에서도 언제든 해제할 수 있어요.
 
 ### 여러 앨범 = 여러 저장소
 
@@ -84,32 +103,31 @@ Git LFS가 권장되지만, GitHub의 LFS 서버는 브라우저에서 직접 �
 - **용량**: 위 표 참고. 여유 있게 쓰려면 모임별·연도별로 저장소를 나누고, 필요하면 **원본 파일도 저장**을 끄세요 (JPEG만 저장, 라이브 영상은 유지).
 - **삭제해도 용량이 줄지 않아요**: Git 이력에 남기 때문이에요. 완전히 지우려면 저장소를 새로 만들어야 해요.
 - **요청 한도**: 토큰당 시간당 5,000회. 한 번에 수백 장을 올리면 GitHub의 보조 한도에 걸릴 수 있는데, 앱이 자동으로 기다렸다가 이어서 올려요.
-- **누구나 쓰기**: 배포 주소만 있으면 누구든 자기 GitHub 저장소와 토큰으로 연결해서 쓸 수 있어요. 사진은 각자의 저장소에 저장되고 Vercel 서버에는 아무것도 남지 않아요. 다만 "GitHub로 로그인" 같은 원클릭 연결은 아직 없어서 저장소와 토큰을 직접 만들어야 해요.
 - **라이브 영상 코덱**: 아이폰 라이브 영상은 보통 HEVC라서 Safari·macOS에서는 잘 재생되지만, 일부 Windows/Android 브라우저에서는 정지 사진만 보일 수 있어요.
-- **HEIC**: Safari는 바로 읽고, 다른 브라우저에서 HEIC를 올릴 땐 변환기(heic2any)를 CDN에서 불러와요. 보는 쪽은 항상 JPEG 미리보기라서 어디서나 보여요.
+- **HEIC 올리기**: 아이폰·맥의 Safari에서는 바로 돼요. 다른 브라우저(Windows Chrome 등)는 HEIC를 못 읽어서 JPEG로 바꿔 올려야 해요. 변환 라이브러리가 `eval`을 써서 보안 정책(CSP)상 넣지 않았어요. 보는 쪽은 항상 JPEG 미리보기라 어디서나 보여요.
 - **장소 이름**: OpenStreetMap Nominatim(초당 1회 제한)을 써서, 올린 뒤 몇 초~몇 분에 걸쳐 채워져요. 설정에서 끌 수 있어요.
-- 토큰은 브라우저 `localStorage`에 저장돼요. 공용 기기에서는 쓰고 나서 **연결 해제**하세요.
+- 로그인 정보는 브라우저 `localStorage`에 저장돼요. 공용 기기에서는 쓰고 나서 **로그아웃**하세요.
+- 사진을 보려면 GitHub 계정이 있어야 해요 (저장소가 비공개라서요).
 
 ## 배포 · 실행
 
-정적 파일이라 어디든 올리면 돼요. HTTPS가 필요해요 (서비스 워커, 해시 계산).
+위의 Vercel 배포를 권장해요. 로컬에서 보기만 하려면 (로그인 버튼은 숨고 토큰 연결만 돼요):
 
 ```bash
 cd moa && npx http-server -p 8080 -c-1 .     # → http://localhost:8080
 ```
 
-- **GitHub Pages**: 이 폴더가 있는 저장소(공개)에서 Pages를 켜고 `/moa/`로 접속. 앱 코드에는 비밀이 없어서 공개돼도 괜찮아요 — 사진은 비공개 저장소에만 있어요.
-- **Vercel / Netlify**: Root Directory를 `moa`로 지정, 빌드 명령 없음.
+HTTPS(또는 localhost)가 필요해요 (서비스 워커, 해시 계산).
 
 ## 테스트
 
 ```bash
 cd moa
-npm test        # 순수 로직: EXIF·QuickTime 파싱, 라이브 포토 매칭, 동시 편집 병합, 그룹핑, 월별 파일, 용량·한도 계산
-npm run e2e     # Playwright: 가짜 GitHub API로 두 친구가 앨범을 만들고 올리고 편집 (--shots <dir> 로 스크린샷)
+npm test        # 순수 로직 + 로그인 함수(state 검사, 코드 교환, 권한 취소)
+npm run e2e     # Playwright: 가짜 GitHub로 로그인 → 앨범 생성 → 업로드 → 아이디로 초대 → 친구가 로그인해 수락 → 함께 편집 → 로그아웃 (--shots <dir> 로 스크린샷)
 ```
 
-e2e 테스트는 실제 GitHub 대신 `test/mock-github.mjs`(fast-forward 검사까지 흉내 내는 인메모리 Git API)를 쓰고, 지도 타일·지명 검색은 가짜 응답으로 대체해요.
+e2e 테스트는 실제 `/api/auth/*` 함수를 가짜 github.com 로그인 화면과 연결하고, GitHub API는 `test/mock-github.mjs`(저장소 생성·초대·fast-forward 검사까지 흉내 내는 인메모리 API)로 대체해요. 운영과 같은 CSP를 걸고 위반이 있으면 실패해요. 지도 타일·지명 검색은 가짜 응답이에요.
 
 ## 파일
 
@@ -117,6 +135,8 @@ e2e 테스트는 실제 GitHub 대신 `test/mock-github.mjs`(fast-forward 검사
 |---|---|
 | `js/core.js` | DOM 없는 순수 로직: index 형식, 편집 op, 그룹/정렬, EXIF→필드, QuickTime atom 파서, Apple MakerNote(라이브 포토 ID), 라이브 포토 매칭 |
 | `js/github.js` | GitHub REST 클라이언트: 월별 파일 읽기/쓰기, 원자적 커밋 + 충돌 재시도, 분당 6회 저장 조절, 미디어 캐시 |
+| `api/auth/*.js`, `server/oauth.js` | GitHub 로그인(OAuth) — 설정 확인, 로그인 이동, 콜백에서 토큰 교환, 로그아웃 시 권한 취소. Vercel 함수로 실행 |
+| `vercel.json` | 보안 헤더(CSP 등) |
 | `js/limits.js` | GitHub 저장소 한도 계산: 남은 용량, 업로드 예상 크기, 폴더·파일 한도, 푸시 속도 |
 | `js/media.js` | 파일 분석(해시·메타데이터), HEIC 디코딩, JPEG 미리보기/썸네일 생성 |
 | `js/geo.js` | Nominatim 역지오코딩·장소 검색 (1초 간격, 캐시) |

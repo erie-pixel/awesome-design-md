@@ -38,11 +38,11 @@
 
 "GitHub로 로그인"을 하려면 GitHub에 이 앱을 **OAuth App**으로 한 번 등록해야 해요. 로그인 과정에 비밀키(client secret)가 필요한데 그건 브라우저에 둘 수 없어서, `moa/api/auth/`의 작은 함수 4개가 Vercel에서 그 한 단계만 처리해요. 따로 서버를 운영하는 게 아니라 **저장소의 파일을 Vercel이 배포할 때 알아서 실행**하는 거예요.
 
-1. **Vercel에 배포** — [vercel.com/new](https://vercel.com/new)에서 이 저장소를 Import → **Root Directory: `moa`**, Framework Preset: *Other*, 빌드 명령 없음 → Deploy. 주소가 생겨요 (예: `https://moa-xxx.vercel.app`).
+1. **Vercel에 배포** — [vercel.com/new](https://vercel.com/new)에서 이 저장소를 Import → **Root Directory: `moa`**, Framework Preset: *Other*, 빌드 명령 없음 → Deploy. 주소가 생겨요 (현재 운영: `https://albummoa.vercel.app`).
 2. **GitHub OAuth App 등록** — [github.com/settings/applications/new](https://github.com/settings/applications/new)
    - Application name: `Moa` (로그인 화면에 보이는 이름)
-   - Homepage URL: `https://moa-xxx.vercel.app`
-   - Authorization callback URL: `https://moa-xxx.vercel.app/api/auth/callback`
+   - Homepage URL: `https://albummoa.vercel.app`
+   - Authorization callback URL: `https://albummoa.vercel.app/api/auth/callback`
    - 등록 후 **Client ID**를 복사하고 **Generate a new client secret**으로 비밀키 생성·복사
 3. **Vercel 환경 변수** — Project → Settings → Environment Variables에 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` 추가 → **Redeploy**.
 

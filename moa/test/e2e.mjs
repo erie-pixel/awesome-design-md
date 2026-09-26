@@ -104,7 +104,8 @@ const watch = (page, who) => {
   page.on('pageerror', e => { console.log(`pageerror(${who}):`, e.message); failures++; });
   page.on('console', m => { if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) { console.log(`CSP(${who}):`, m.text()); failures++; } });
 };
-const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+// UTF-8 locale so Korean download names survive, as on any real device
+const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'], env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } });
 
 try {
   // ---------- stubs for OSM ----------
@@ -696,6 +697,25 @@ try {
   await A.click('[data-repo="alice/moa-spring-trip"]');
   await A.waitForSelector('#content .tile');
 
+  // select photos → Download → one ZIP with the originals (and Live Photo videos)
+  await A.click('#selectBtn');
+  const pick = await A.$$eval('#content .tile', t => t.slice(0, 2).map(x => x.dataset.id));
+  for (const id of pick) await A.click(`#content .tile[data-id="${id}"]`);
+  await A.click('[data-sel=download]');
+  await A.click('#dlZip');
+  await A.waitForSelector('#dlSave', { timeout: 30000 });
+  const [zipDl] = await Promise.all([A.waitForEvent('download'), A.click('#dlSave')]);
+  const zipPath = path.join(ROOT, '.e2e-download.zip');
+  await zipDl.saveAs(zipPath);
+  const want = await A.evaluate(ids => ids.map(id => window.__moa.S.index.photos[id].name), pick);
+  const { execFileSync } = await import('node:child_process');
+  const zipInfo = JSON.parse(execFileSync('python3', ['-c', 'import zipfile,json,sys,subprocess; z=zipfile.ZipFile(sys.argv[1]); t=subprocess.run(["unzip","-tq",sys.argv[1]],capture_output=True); print(json.dumps({"bad": z.testzip() or (t.returncode and t.stdout.decode()), "names": z.namelist()}))', zipPath]).toString());
+  const zipOk = !zipInfo.bad && want.every(n => zipInfo.names.includes(n)) && zipDl.suggestedFilename() === '우리들의 봄 여행.zip';
+  if (!zipOk) { fs.copyFileSync(zipPath, '/tmp/moa-e2e-failed.zip'); console.log('ZIP DEBUG', JSON.stringify({ zipInfo, want, file: zipDl.suggestedFilename() })); }
+  fs.unlinkSync(zipPath);
+  ok(zipOk, `selected photos download as one ZIP (${zipInfo.names.join(', ')})`);
+  await A.click('#selectBtn');
+
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 
   // sign-out revokes the grant and forgets the token
@@ -746,6 +766,29 @@ try {
   ok(await Cp.isDisabled('#upGo') && await Cp.isVisible('#upAck'), 'upload past the 10GB guidance needs an explicit acknowledgement');
   await Cp.check('#upAck');
   ok(!(await Cp.isDisabled('#upGo')), 'acknowledging enables the upload button');
+
+  // the app is closed mid-upload: reopening the album picks the upload back up, and says so when done
+  await ctxC.grantPermissions(['notifications']);
+  await ctxC.route(`http://localhost:${API_PORT + 1}/**/git/blobs`, async r => { await new Promise(res => setTimeout(res, 600)); r.continue(); });
+  const tilesBefore = await Cp.locator('#content .tile').count();
+  await Cp.click('#upGo');
+  await Cp.waitForFunction(() => window.__moa.queued().then(n => n === 1), null, { timeout: 10000 });
+  // pretend the app is in the background, and record notifications (headless Chromium can't display them)
+  await ctxC.addInitScript(() => {
+    Object.defineProperty(document, 'hidden', { get: () => true });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
+    Object.defineProperty(Notification, 'permission', { get: () => 'granted' }); // headless Chromium always denies
+    window.__notes = [];
+    ServiceWorkerRegistration.prototype.showNotification = function (title, o) { window.__notes.push(`${title}: ${o.body}`); return Promise.resolve(); };
+  });
+  await Cp.reload();
+  ok(Object.keys(readIndex(LR).photos).length === 1, 'nothing was committed before the app closed');
+  await Cp.waitForFunction(n => document.querySelectorAll('#content .tile').length === n + 1, tilesBefore, { timeout: 60000 });
+  ok(Object.values(readIndex(LR).photos).some(p => p.name === 'IMG_0001.JPG'), 'reopening the album finished the upload from the saved queue');
+  await Cp.waitForFunction(() => window.__moa.queued().then(n => n === 0), null, { timeout: 10000 });
+  ok(true, 'queue emptied once the photo landed');
+  const notes = await Cp.evaluate(() => window.__notes);
+  ok(notes.some(b => /Uploaded 1/.test(b)), `a system notification says the upload finished (${JSON.stringify(notes)})`);
   if (SHOTS) { await Cp.waitForTimeout(500); await Cp.screenshot({ path: `${SHOTS}/12-upload-over-limit.png` }); }
   legacy.server.close();
 } finally {

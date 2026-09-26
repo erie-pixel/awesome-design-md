@@ -12,6 +12,8 @@ import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecov
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
+import * as Q from './queue.js';
+import { ZipWriter } from './zip.js';
 import { t, setLang, lang, locale, fmtDay, fmtMonth, fmtTime } from './i18n.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -35,7 +37,7 @@ const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', a
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
-const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true, lang: 'en' }, load(LS.prefs, {}));
+const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true, notify: true, lang: 'en' }, load(LS.prefs, {}));
 setLang(prefs.lang);
 
 const S = {
@@ -139,6 +141,22 @@ function setSync(state, arg) {
   el.classList.toggle('err', state === 'error');
   el.classList.toggle('info', state === 'throttle');
   el.textContent = state ? t(`sync.${state}`, { s: arg }) : '';
+}
+
+// ---------------- system notifications: a long job finished while Moa was in the background ----------------
+const canNotify = () => typeof Notification !== 'undefined';
+/** Ask once, from the tap that starts a long job (browsers only allow it from a gesture). */
+function askNotify() {
+  if (prefs.notify && canNotify() && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+}
+async function notify(title, body) {
+  if (!prefs.notify || !canNotify() || Notification.permission !== 'granted' || !document.hidden) return;
+  const opts = { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'moa-done' };
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) return await reg.showNotification(title, opts);
+  } catch { /* fall back to a page notification */ }
+  try { new Notification(title, opts); } catch { /* not allowed here (e.g. iOS outside the Home Screen app) */ }
 }
 
 // header ring: fills with the progress of a long job (uploads, encryption on/off)
@@ -364,6 +382,7 @@ async function logout() {
   S.space = null; S.gh = null; S.index = null;
   S.keys.clear();
   localStorage.removeItem(LS.invite);
+  Q.clearAll();
   await Promise.all([clearMediaCache().catch(() => {}), forgetAllKeys()]);
   urls.clear(); resolved.clear();
   signedOut(t('auth.signedOut'));
@@ -605,6 +624,7 @@ async function openSpace(sp, { initTitle, initPass } = {}) {
     await refresh(true);
     setSync(S.pending.length ? 'pending' : null);
     if (S.pending.length) scheduleFlush(500);
+    resumeUploads();
   } catch (e) {
     if (S.space !== sp) return;
     setSync('error');
@@ -731,7 +751,7 @@ function flush() {
 // periodic pull so friends' uploads show up
 setInterval(() => { if (!document.hidden) pull(); }, 45000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); else if (S.pending.length) flush(); });
-window.addEventListener('online', () => { if (S.pending.length) flush(); pull(); });
+window.addEventListener('online', () => { if (S.pending.length) flush(); pull(); resumeUploads(); });
 function pull() {
   if (!S.gh || !S.head || U.running) return;
   serial(() => refresh().catch(() => {}));
@@ -1008,6 +1028,7 @@ function renderToolbar(all) {
   const tags = C.tagCounts(all).slice(0, 40);
   $('#chips').innerHTML = [
     `<button class="chip${!f.kind && !f.tag ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
+    videos ? `<button class="chip${f.kind === 'photo' ? ' on' : ''}" data-chip="kind" data-v="photo">${t('chip.photos')} <span class="n">${all.length - videos}</span></button>` : '',
     lives ? `<button class="chip${f.kind === 'live' ? ' on' : ''}" data-chip="kind" data-v="live">${ICON.live}LIVE <span class="n">${lives}</span></button>` : '',
     videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">${t('chip.videos')} <span class="n">${videos}</span></button>` : '',
     favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ ${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
@@ -1047,7 +1068,7 @@ function renderMap(list, c) {
   };
   map.on('zoomend', draw);
   draw();
-  setTimeout(() => map.invalidateSize(), 50);
+  setTimeout(() => { if (S.map === map) map.invalidateSize(); }, 50); // the view may have changed (and removed this map) meanwhile
 }
 
 function openClusterSheet(list) {
@@ -1163,6 +1184,7 @@ function renderSettings() {
       <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && !S.gh.sealed ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(load(LS.convert(S.space.id), null)?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && S.gh.sealed ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(load(LS.convert(S.space.id), null)?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}
+      ${all.length ? `<button class="row row-btn" data-act="downloadAll"><span class="grow"><b>${t('dl.all')}</b><small>${t('n.photos', { n: all.length })}</small></span><span class="val">›</span></button>` : ''}
       ${S.canWrite ? `<button class="row row-btn" data-act="purge"><span class="grow"><b style="color:var(--danger)">${t('purge.title')}</b></span><span class="val">›</span></button>` : ''}
     </div>
     <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
@@ -1185,6 +1207,7 @@ function renderSettings() {
       ${sw('autoplayLive')}
       ${sw('keepOriginal')}
       ${sw('geocode')}
+      ${canNotify() ? sw('notify') : ''}
       <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>${t('set.clearCache')}</b></span></button>
     </div>
     <h2 class="section-title">${t('set.account')}</h2>
@@ -1716,6 +1739,7 @@ async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
     setSync(null);
     ringDone();
     toast(t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
+    notify(S.index?.title || 'Moa', t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
     if (toSealed) recoverySheet(job.recovery); else closeSheet();
     // encrypting only helps once the plain copies are gone from history too
     if (toSealed || purge) await eraseHistory();
@@ -1814,6 +1838,7 @@ function renderLocked(header) {
       if (S.pending.length) scheduleFlush(500);
       // opened with the recovery code: the passphrase is lost, so set a new one now
       if (viaCode && S.canWrite) passphraseSheet({ forgot: true, title: t('rec.setNew') });
+      else resumeUploads();
     } catch (ex) {
       if (!$('#unlockBtn')) return;
       btn.disabled = false; btn.textContent = t('lock.unlock');
@@ -2354,6 +2379,7 @@ function showUploadSheet(review) {
     ${review ? `<div id="upPlan">${uploadPlanHTML(E, prefs.keepOriginal).html}</div>` : ''}
     ${!review ? `<div class="progress"><i id="upBar" style="transform:scaleX(${U.total ? (U.done + U.failed) / U.total : 0})"></i></div>` : ''}
     <div class="up-list">${thumbs}</div>${E.length > 200 ? `<p class="up-summary">+${E.length - 200}</p>` : ''}
+    ${!review && U.running ? `<div class="actions"><button class="btn btn-quiet" id="upStop"${U.stop ? ' disabled' : ''}>${t(U.stop ? 'up.stopping' : 'up.stop')}</button></div>` : ''}
     ${review ? `
       <label class="field"><span>${t('tab.albums')}</span><select id="upAlbum"><option value="">${t('up.libraryOnly')}</option>${albums.map(([id, a]) => `<option value="${esc(id)}"${id === S.album ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
       <label class="field"><span>${t('info.tags')}</span><input id="upTags" placeholder="${t('tags.ph')}"></label>
@@ -2361,6 +2387,7 @@ function showUploadSheet(review) {
       <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="upGo"${go.length ? '' : ' disabled'}>${t('up.go')}</button></div>` : ''}`,
   { kind: 'upload', onClose: () => { if (!U.running) cleanupUpload(); else updatePill(); } });
   $('#upPill').hidden = true;
+  $('#upStop', sh)?.addEventListener('click', e => { U.stop = true; e.target.disabled = true; e.target.textContent = t('up.stopping'); });
   if (review) {
     const gate = () => {
       const { plan } = uploadPlanHTML(E, $('#upOrig', sh).checked);
@@ -2410,14 +2437,17 @@ function updatePill() {
   pill.textContent = `${t('up.uploading')} ${U.done}/${U.total}`;
 }
 
-async function startUpload(opts) {
+async function startUpload(opts, { resumed = false } = {}) {
+  if (!resumed) askNotify(); // still inside the tap on "Upload"
   const list = U.entries.filter(e => !e.skip);
-  Object.assign(U, { running: true, done: 0, failed: 0, total: list.length });
+  Object.assign(U, { running: true, done: 0, failed: 0, total: list.length, stop: false });
   ringProgress(0);
   const sp = S.space;
+  showUploadSheet(false);
   let wake = null;
   try { wake = await navigator.wakeLock?.request('screen'); } catch { /* not supported */ }
-  showUploadSheet(false);
+  // keep a copy on the device until each photo's commit lands, so a closed app can pick up again
+  if (!resumed) { try { await Q.enqueue(sp.id, list, opts); } catch (err) { console.warn('upload queue unavailable', err); } }
   const batch = { files: [], photos: [], entries: [], bytes: 0 };
   const commitBatch = async () => {
     if (!batch.photos.length) return;
@@ -2431,18 +2461,19 @@ async function startUpload(opts) {
       });
       U.done += es.length;
       es.forEach(e => setEntryStatus(e, 'done'));
+      Q.done(es.map(e => e.qid).filter(Boolean)).catch(() => {});
     } catch (err) {
-      console.error(err);
+      console.error(err); // stays queued: tried again next time the album opens
       U.failed += es.length;
       es.forEach(e => setEntryStatus(e, 'fail'));
       toast(t('save.failedNow', { e: errMsg(err) }), 4000);
     }
   };
   for (const e of list) {
-    if (S.space !== sp) break;
+    if (S.space !== sp || U.stop) break;
     setEntryStatus(e, 'processing');
     try {
-      const { photo, files, bytes } = await preparePhoto(e, opts);
+      const { photo, files, bytes } = await preparePhoto(e, e.opts || opts);
       batch.files.push(...files);
       batch.photos.push(photo);
       batch.entries.push(e);
@@ -2454,18 +2485,113 @@ async function startUpload(opts) {
       toast(`${e.main.name}: ${errMsg(err)}`, 4000);
       U.failed++;
       setEntryStatus(e, 'fail');
+      // a file that can't be read won't get better; a network or GitHub error might
+      if (err.status === undefined && e.qid) Q.done([e.qid]).catch(() => {});
     }
   }
   await commitBatch();
+  if (U.stop) Q.done(list.filter(e => e.status?.k !== 'done' && e.qid).map(e => e.qid)).catch(() => {});
   U.running = false;
   ringDone();
   wake?.release?.().catch(() => {});
   updatePill();
-  toast(U.failed ? t('up.partial', { n: U.done, f: U.failed }) : t('up.allDone', { n: U.done }), 3500);
+  const summary = U.failed ? t('up.partial', { n: U.done, f: U.failed }) : t('up.allDone', { n: U.done });
+  toast(summary, 3500);
+  notify(S.index?.title || 'Moa', summary);
   if ($('#sheet').dataset.kind === 'upload' && !U.failed) setTimeout(() => { if (!U.running && $('#sheet').dataset.kind === 'upload') closeSheet(); }, 1200);
   else if ($('#sheet').dataset.kind !== 'upload') cleanupUpload();
   S.gh.info().then(i => { if (S.space === sp) { S.repoInfo = i; rerender(); } }).catch(() => {});
   runGeocodeJob();
+}
+
+// ---------------- downloading many photos: ZIP, or straight into Photos via the share sheet ----------------
+
+const DL = { running: false, stop: false };
+const ZIP_PART = 300 * 1024 * 1024; // phones hold a part in memory; bigger albums come in several ZIPs
+const safeName = s => String(s || 'Moa').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Moa';
+const canShareFiles = () => { try { return !!navigator.canShare?.({ files: [new File([''], 'a.jpg', { type: 'image/jpeg' })] }); } catch { return false; } };
+
+/** The files one photo downloads as: the original (or the JPEG when none was kept), plus its Live Photo video. */
+async function photoFiles(p) {
+  const date = new Date(p.takenAt || p.uploadedAt || Date.now());
+  const base = (p.name || p.id).replace(/\.[^.]+$/, '');
+  const main = p.files.original
+    ? { name: p.name || `${p.id}.${C.extOf(p.files.original) || 'jpg'}`, path: p.files.original, type: p.mime || 'image/jpeg' }
+    : { name: `${base}.jpg`, path: p.files.preview || p.files.thumb, type: 'image/jpeg' };
+  const want = [main];
+  if (p.files.live) want.push({ name: `${base}.${LIVE_EXT[p.liveMime] || 'mov'}`, path: p.files.live, type: p.liveMime || 'video/quicktime' });
+  const out = [];
+  for (const f of want) out.push({ ...f, date, blob: await S.gh.media(f.path, { cache: false }) });
+  return out;
+}
+
+function downloadSheet(list) {
+  if (!list.length) return;
+  if (DL.running) return toast(t('up.busy'));
+  const bytes = list.reduce((n, p) => n + (p.sizes?.original || p.sizes?.preview || 0) + (p.sizes?.live || 0), 0);
+  const share = canShareFiles() && list.length <= 30;
+  const sh = openSheet(`<h2>${t('dl.title', { n: list.length })}</h2><p class="sheet-p">≈ ${C.fmtBytes(bytes)}</p>
+    <div class="actions">${share ? `<button class="btn btn-quiet" id="dlShare">${t('dl.toPhotos')}</button>` : `<button class="btn btn-quiet" data-close>${t('common.cancel')}</button>`}<button class="btn btn-primary" id="dlZip">${t('dl.zip')}</button></div>`);
+  $('#dlZip', sh).onclick = () => runDownload(list, 'zip');
+  $('#dlShare', sh)?.addEventListener('click', () => runDownload(list, 'share'));
+}
+
+async function runDownload(list, mode) {
+  askNotify();
+  Object.assign(DL, { running: true, stop: false });
+  const sp = S.space, total = list.length, title = safeName(S.index?.title);
+  let done = 0;
+  const sh = openSheet(`<h2>${t('dl.preparing')} <small id="dlCount">0/${total}</small></h2><div class="progress"><i id="dlBar"></i></div>
+    <div id="dlReady"></div><div class="actions"><button class="btn btn-quiet" id="dlStop">${t('up.stop')}</button></div>`, { kind: 'download', onClose: () => { DL.stop = true; } });
+  $('#dlStop', sh).onclick = () => closeSheet();
+  const progress = () => {
+    if ($('#dlCount', sh)) { $('#dlCount', sh).textContent = `${done}/${total}`; $('#dlBar', sh).style.transform = `scaleX(${done / total})`; }
+    ringProgress(done / total);
+  };
+  // saving needs a fresh tap (browsers only download or share from a gesture), so each result waits for one
+  const ready = (label, onTap) => new Promise(resolve => {
+    const box = $('#dlReady', sh);
+    if (!box) return resolve();
+    box.innerHTML = `<button class="btn btn-primary btn-block" id="dlSave">${label}</button>`;
+    $('#dlSave', box).onclick = () => { onTap(); box.innerHTML = ''; resolve(); };
+    notify(S.index?.title || 'Moa', t('dl.ready'));
+  });
+  const saveBlob = (blob, name) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  };
+  let zip = new ZipWriter(), part = 1;
+  const shared = [];
+  try {
+    for (const p of list) {
+      if (DL.stop || S.space !== sp) throw new Error('stopped');
+      const items = await photoFiles(p);
+      if (mode === 'share') shared.push(...items.map(i => new File([i.blob], i.name, { type: i.type, lastModified: +i.date })));
+      else {
+        const size = items.reduce((n, i) => n + i.blob.size, 0);
+        if (zip.count && zip.size + size > ZIP_PART) {
+          const full = zip.build(), k = part++;
+          await ready(t('dl.savePart', { k }), () => saveBlob(full, `${title}-${k}.zip`));
+          zip = new ZipWriter();
+        }
+        for (const i of items) await zip.add(i.name, i.blob, i.date);
+      }
+      done++;
+      progress();
+    }
+    ringDone();
+    if (mode === 'share') await ready(t('dl.saveN', { n: shared.length }), () => navigator.share({ files: shared }).catch(e => { if (e.name !== 'AbortError') toast(t('dl.failed', { e: errMsg(e) }), 4000); }));
+    else { const last = zip.build(); await ready(part > 1 ? t('dl.savePart', { k: part }) : t('dl.saveZip'), () => saveBlob(last, part > 1 ? `${title}-${part}.zip` : `${title}.zip`)); }
+    DL.running = false;
+    setTimeout(() => { if ($('#sheet').dataset.kind === 'download') closeSheet(); }, 400);
+  } catch (e) {
+    DL.running = false;
+    ringProgress(null);
+    if (e.message !== 'stopped') { toast(t('dl.failed', { e: errMsg(e) }), 4000); if ($('#sheet').dataset.kind === 'download') closeSheet(); }
+  }
 }
 
 function placeholderThumb() {
@@ -2479,6 +2605,24 @@ function placeholderThumb() {
 }
 
 const clean = o => { for (const k of Object.keys(o)) { const v = o[k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) delete o[k]; } return o; };
+
+/** Pick up an upload that didn't finish (app closed, iOS suspended it, network gone). */
+async function resumeUploads() {
+  if (U.running || CONV.running || !S.index || !S.canWrite) return;
+  const sp = S.space;
+  let rows;
+  try { rows = await Q.pending(sp.id); } catch { return; }
+  if (!rows.length || S.space !== sp || U.running || !S.index) return;
+  // anything whose commit landed just before the app closed is already in the album
+  const have = new Set(photos().map(p => p.hash).filter(Boolean));
+  const landed = rows.filter(r => r.main?.hash && have.has(r.main.hash));
+  Q.done(landed.map(r => r.qid)).catch(() => {});
+  const todo = rows.filter(r => !landed.includes(r) && r.main?.file);
+  if (!todo.length) return;
+  U.entries = todo.map((r, i) => ({ ...r, main: { ...r.main, key: 'r' + i }, live: r.live || null, skip: false, status: null }));
+  toast(t('up.resuming', { n: todo.length }));
+  startUpload(null, { resumed: true });
+}
 
 async function preparePhoto(e, opts) {
   const m = e.main, meta = m.meta;
@@ -2626,6 +2770,7 @@ function bind() {
       localStorage.removeItem(LS.pending(sp.id));
       S.keys.delete(sp.id);
       forgetKey(sp.id);
+      Q.clearSpace(sp.id).catch(() => {});
       if (sp === S.space) { S.space = null; S.gh = null; S.index = null; S.spaces[0] ? openSpace(S.spaces[0]) : showWelcome(); }
       else render();
       return;
@@ -2640,6 +2785,7 @@ function bind() {
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
       case 'purge': return purgeSheet();
+      case 'downloadAll': return downloadSheet(photos().sort((a, b) => C.sortTs(a) - C.sortTs(b)));
       case 'passphrase': return passphraseSheet();
       case 'recovery': return newRecoverySheet();
       case 'encryptAlbum': return encryptAlbumSheet();
@@ -2673,6 +2819,7 @@ function bind() {
     prefs[k] = e.target.checked;
     save(LS.prefs, prefs);
     if (k === 'geocode' && prefs.geocode) runGeocodeJob();
+    if (k === 'notify' && prefs.notify) askNotify();
   });
 
   $('#selectBar').onclick = e => {
@@ -2682,6 +2829,7 @@ function bind() {
     if (!ids.length) return toast(t('select.none'));
     if (b.dataset.sel === 'tag') tagSheet(ids);
     else if (b.dataset.sel === 'album') pickAlbum(ids);
+    else if (b.dataset.sel === 'download') downloadSheet(ids.map(id => S.index.photos[id]).filter(Boolean));
     else deletePhotos(ids, () => setSelecting(false));
   };
 
@@ -2722,4 +2870,4 @@ bind();
 boot();
 
 // test hook (used by test/e2e.mjs)
-window.__moa = { S, flush, refresh: () => serial(() => refresh()), showHome };
+window.__moa = { S, flush, refresh: () => serial(() => refresh()), showHome, queued: () => Q.pending(S.space.id).then(r => r.length) };

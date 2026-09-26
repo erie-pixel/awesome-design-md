@@ -511,6 +511,7 @@ export function filterPhotos(list, { album, tag, kind, q } = {}) {
     if (tag && !(p.tags || []).includes(tag)) return false;
     if (kind === 'live' && !p.files?.live) return false;
     if (kind === 'video' && p.kind !== 'video') return false;
+    if (kind === 'photo' && p.kind === 'video') return false;
     if (kind === 'fav' && !(p.likes || []).length) return false;
     if (query) {
       const hay = [p.name, p.caption, p.by, p.place?.label, p.place?.name, p.place?.country, p.place?.region, ...(p.tags || []), p.camera?.model].filter(Boolean).join(' ').toLowerCase();

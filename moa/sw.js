@@ -1,7 +1,7 @@
 /* Moa service worker — app shell offline cache.
    Photos are cached by the app itself (Cache Storage "moa-media-v1");
    GitHub API calls are never intercepted here. */
-const CACHE = 'moa-shell-v8';
+const CACHE = 'moa-shell-v9';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,8 @@ const ASSETS = [
   './js/core.js',
   './js/github.js',
   './js/crypto.js',
+  './js/queue.js',
+  './js/zip.js',
   './js/media.js',
   './js/geo.js',
   './js/limits.js',
@@ -64,4 +66,10 @@ self.addEventListener('fetch', e => {
       return cached || fresh;
     })
   );
+});
+
+// a "finished" notification: bring Moa back to the front
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => (list[0] ? list[0].focus() : self.clients.openWindow('./'))));
 });

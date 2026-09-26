@@ -401,3 +401,24 @@ test('crypto: recovery code opens the album when the passphrase is lost; a devic
   assert.deepEqual([...await K.open(await K.unlockAlbumKey(h2, 'brand new passphrase'), file)], [7, 8, 9]);
   assert.deepEqual([...await K.open(await K.unlockWithRecovery(h2, code), file)], [7, 8, 9]);
 });
+
+test('filterPhotos: photos-only leaves videos out', () => {
+  const list = [{ id: 'a', kind: 'photo' }, { id: 'b', kind: 'video' }, { id: 'c', kind: 'photo', files: { live: 'x' } }];
+  assert.deepEqual(C.filterPhotos(list, { kind: 'photo' }).map(p => p.id), ['a', 'c']);
+  assert.deepEqual(C.filterPhotos(list, { kind: 'video' }).map(p => p.id), ['b']);
+});
+
+import { ZipWriter, crc32 } from '../js/zip.js';
+test('zip: CRC-32 check value, unique names, readable archive layout', async () => {
+  assert.equal(crc32(new TextEncoder().encode('123456789')).toString(16), 'cbf43926');
+  const z = new ZipWriter();
+  await z.add('사진.jpg', new Blob([new Uint8Array([1, 2, 3])]), new Date(2024, 4, 4));
+  await z.add('사진.jpg', new Blob(['x']));
+  const u8 = new Uint8Array(await z.build().arrayBuffer());
+  const dv = new DataView(u8.buffer);
+  assert.equal(dv.getUint32(0, true), 0x04034b50);
+  const end = u8.length - 22;
+  assert.equal(dv.getUint32(end, true), 0x06054b50);
+  assert.equal(dv.getUint16(end + 10, true), 2);
+  assert.ok(new TextDecoder().decode(u8).includes('사진 (2).jpg'));
+});

@@ -473,4 +473,5 @@ export default {
   "setup.later": ["Not now", "나중에"],
   "setup.go": ["Done", "완료"],
   "setup.note": ["Smart tags are a setting of this device; Face ID is per album.", "자동 태그는 이 기기 설정이고, Face ID는 앨범마다 켜요."],
+  "app.updated": ["Moa was updated. The new version loads the next time you open it.", "Moa가 업데이트됐어요. 다음에 열면 새 버전이 적용돼요."],
 };

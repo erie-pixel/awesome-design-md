@@ -1,7 +1,7 @@
 /* Moa service worker — app shell offline cache.
    Photos are cached by the app itself (Cache Storage "moa-media-v1");
    GitHub API calls are never intercepted here. */
-const CACHE = 'moa-shell-v14';
+const CACHE = 'moa-shell-v15';
 const ASSETS = [
   './',
   './index.html',
@@ -29,10 +29,12 @@ const ASSETS = [
   './icons/tiles.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/maskable-512.png',
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache, so a new version never picks up an old file
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {

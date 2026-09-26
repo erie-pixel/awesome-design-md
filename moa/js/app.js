@@ -3597,7 +3597,16 @@ function applyStaticText() {
 
 function registerSW() {
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // a new deploy's worker took over: reload into it (styles, icons, code) unless something is in progress
+    const hadWorker = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker) return; // first visit: nothing old on screen
+      const busy = () => U.running || CONV.running || DL.running || sheetOpen() || S.pending.length;
+      if (!busy()) return location.reload();
+      toast(t('app.updated'), 4000);
+      const later = setInterval(() => { if (!busy() && document.hidden) { clearInterval(later); location.reload(); } }, 5000);
+    });
+    navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {});
   }
 }
 

@@ -77,6 +77,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
 
   const api = {
     stats, at, gists,
+    failTrees: 0, // the next N tree writes are refused (a save GitHub won't take)
     repos: () => [...R.values()].map(r => `${r.owner}/${r.name}`),
     /** Most ref updates one user made to one repository inside any 60s window (GitHub's guidance is per repository). */
     maxPushesPerMinute(user) {
@@ -231,6 +232,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       return send(201, { sha: putBlob(Buffer.from(body.content, body.encoding === 'base64' ? 'base64' : 'utf8')) });
     }
     if (p === '/git/trees' && req.method === 'POST') {
+      if (api.failTrees > 0) { api.failTrees--; return send(422, { message: 'Invalid tree info' }); }
       const base = trees.get(body.base_tree);
       if (!base) return send(422, { message: 'base_tree not found' });
       const t = new Map(base);

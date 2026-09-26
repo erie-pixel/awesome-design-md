@@ -286,7 +286,26 @@ try {
   await A.waitForFunction(() => document.querySelector('#vStage').classList.contains('live-on'), null, { timeout: 5000 });
   ok(true, 'tapping LIVE replays the motion');
   if (SHOTS) { await A.waitForTimeout(500); await A.screenshot({ path: `${SHOTS}/06-viewer-live.png` }); }
+  // zoom like Photos: double tap in and out, then a two-finger pinch
+  await A.tap('#vStage'); await A.tap('#vStage');
+  ok(await A.waitForFunction(() => /scale\(2\.5\)/.test(document.querySelector('#vImg').style.transform), null, { timeout: 3000 }).then(() => true, () => false), 'double tap zooms in (2.5×)');
+  await A.tap('#vStage'); await A.tap('#vStage');
+  await A.waitForFunction(() => !document.querySelector('#vImg').style.transform, null, { timeout: 3000 });
+  await A.evaluate(() => {
+    const st = document.querySelector('#vStage'), r = st.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const ev = (type, id, x) => st.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: cy, bubbles: true, pointerType: 'touch', isPrimary: id === 11 }));
+    ev('pointerdown', 11, cx - 40); ev('pointerdown', 12, cx + 40);
+    ev('pointermove', 12, cx + 80); ev('pointermove', 11, cx - 80); ev('pointermove', 12, cx + 120); ev('pointermove', 11, cx - 120);
+    ev('pointerup', 12, cx + 120); ev('pointerup', 11, cx - 120);
+  });
+  ok(await A.evaluate(() => /scale\(3/.test(document.querySelector('#vImg').style.transform) && document.querySelector('#vStage').classList.contains('zoomed')), 'two fingers pinch to zoom (3×)');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/06b-zoom.png` });
+  await A.keyboard.press('ArrowRight');
+  await A.keyboard.press('ArrowLeft');
+  ok(await A.evaluate(() => !document.querySelector('#vImg').style.transform), 'moving to another photo resets the zoom');
   await A.click('[data-v=info]');
+  ok(await A.isHidden('#iTag') && await A.isVisible('[data-i=tagOpen]'), 'tag editor stays closed until "+ Add"');
+  await A.click('[data-i=tagOpen]');
   await A.fill('#iTag', '제주');
   await A.press('#iTag', 'Enter');
   await A.waitForSelector('#vInfo .tagrow .chip:has-text("제주")');
@@ -374,10 +393,29 @@ try {
   ok(JSON.stringify(touched) === JSON.stringify(expected), `edits rewrote only the touched shards (${touched.join(', ')})`);
   // comment
   await B.click('[data-v=comments]');
+  ok(!(await B.textContent('#vInfo')).includes('Liked') && (await B.locator('#vInfo textarea').count()) === 0, 'info shows no "Liked" list and no separate caption box');
+  await B.fill('#iCmt', 'draft');
+  await B.evaluate(() => window.__moa.refresh());
+  ok((await B.inputValue('#iCmt')) === 'draft', 'typing isn\'t wiped when the album refreshes underneath');
   await B.fill('#iCmt', '여기 또 가자!');
   await B.press('#iCmt', 'Enter');
+  await B.waitForSelector('#vInfo .cmt:has-text("여기 또 가자!") [data-i=pin]');
+  ok(await B.evaluate(() => document.activeElement?.id === 'iCmt'), 'the comment shows at once and the field keeps focus');
+  await B.click('#vInfo .cmt:has-text("여기 또 가자!") [data-i=pin]');
+  await B.waitForSelector('#vInfo .cmt.pinned:has-text("여기 또 가자!")');
+  ok((await B.textContent('#vCap')).includes('여기 또 가자!'), 'a pinned comment becomes the caption under the photo');
   await B.evaluate(() => window.__moa.flush());
   await B.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
+  ok(readIndex().photos[p0].caption === '여기 또 가자!' && readIndex().photos[p0].captionBy === 'bob', 'caption saved as the pinned comment');
+  // press and hold the heart: who liked it
+  const lk = await B.$('#vLike');
+  const lb = await lk.boundingBox();
+  await B.mouse.move(lb.x + lb.width / 2, lb.y + lb.height / 2);
+  await B.mouse.down(); await B.waitForTimeout(650); await B.mouse.up();
+  await B.waitForSelector('#sheet[data-kind=likers]');
+  ok((await B.textContent('#sheet')).includes('@bob'), 'press and hold the heart shows who liked it');
+  ok((await B.evaluate(id => window.__moa.S.index.photos[id].likes.includes('bob'), p0)), 'holding the heart didn\'t un-like it');
+  await B.click('#scrim', { position: { x: 10, y: 10 } });
   if (SHOTS) await B.screenshot({ path: `${SHOTS}/08-desktop-viewer.png` });
   await B.click('[data-v=close]');
 
@@ -446,7 +484,7 @@ try {
   const bobHadIt = await B.evaluate(async p => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/moa-spring-trip/${p}`)), victim.files.thumb);
   await A.click('[data-act=purge]');
   await A.click('#purgeOk');
-  await A.waitForFunction(() => document.querySelector('#toast').textContent.includes('History erased'), null, { timeout: 20000 });
+  await until(() => RA.history().length === 1, 30000); // the toast can be replaced by the next one, the repository can't
   ok(RA.history().length === 1 && !RA.reachable(victimSha), `history erased: ${RA.history().length} commit, deleted original unreachable`);
   ok(JSON.stringify(RA.paths()) === JSON.stringify(pathsBefore) && Object.keys(readIndex().photos).length === 4, 'the album itself is unchanged');
   // bob's device still points at the old history; his next save lands on the new one
@@ -879,6 +917,7 @@ try {
   await A.click(`#content .tile[data-id="${shib.id}"]`);
   await A.waitForSelector('#viewer:not([hidden])');
   await A.click('[data-v=info]');
+  await A.click('[data-i=tagOpen]');
   await A.click('#vInfo [data-mark="⭐"]');
   await A.waitForSelector('#vInfo [data-mark="⭐"].on');
   await A.fill('#iTag', '여행');
@@ -981,6 +1020,19 @@ try {
   await A.click('[data-repo="alice/moa-spring-trip"]');
   await A.waitForSelector('#content .tile', { timeout: 20000 });
 
+  // ---------- a save GitHub refuses: details, retry ----------
+  ok(await A.locator('#chips [data-v=fav] .heart-solid').count() === 1, 'the Liked chip uses a heart icon');
+  api.failTrees = 1;
+  await A.evaluate(id => { const m = window.__moa; m.S.pending.push({ op: 'tag', ids: [id], tag: '재시도', on: true }); m.flush(); }, byName('IMG_0001.JPG').id);
+  await A.waitForSelector('#sync.err', { timeout: 30000 });
+  await A.click('#sync');
+  await A.waitForSelector('#seRetry');
+  ok((await A.textContent('#seMsg')).includes('Invalid tree info') && (await A.textContent('#seMsg')).includes('422'), 'tapping "Save failed" shows what GitHub said');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/29-save-error.png` });
+  await A.click('#seRetry');
+  await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 60000 });
+  ok(byName('IMG_0001.JPG').tags.includes('재시도') && !(await A.isVisible('#sync.err')), 'retry saves it');
+
   // ---------- recently deleted: kept 30 days, restorable, then gone for good ----------
   const palace = byName('IMG_0003.JPG');
   await A.click('[data-tab=photos]');
@@ -1024,7 +1076,7 @@ try {
   await A.evaluate(v => localStorage.setItem('moa.seenVersion', String(v - 1)), LATEST);
   await A.reload();
   await A.waitForSelector('#sheet .wn', { timeout: 20000 });
-  ok((await A.textContent('#sheet')).includes('Recently deleted'), 'after an update, "What\'s new" shows what changed');
+  ok((await A.textContent('#sheet')).includes('zoom'), 'after an update, "What\'s new" shows what changed');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/28-whats-new.png` });
   await A.click('#sheet [data-close]');
   ok(Number(await A.evaluate(() => localStorage.getItem('moa.seenVersion'))) === LATEST, 'and only once');

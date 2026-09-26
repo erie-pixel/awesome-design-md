@@ -25,6 +25,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 
 const ICON = {
   live: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="2.8"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.3" stroke-dasharray="1.2 2.4"/></svg>',
+  heartSolid: '<svg class="heart-solid" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.5 8 3.3 4.5 6.7 4.5c2.1 0 3.4 1.1 4.3 2.4.9-1.3 2.2-2.4 4.3-2.4 3.4 0 5.2 3.5 4 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>',
+  pinned: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15 3l6 6-2.2.8-3.6 3.6.3 4.1-1.5 1.5-3.5-3.5L6 20l-1-1 4.5-4.5L6 11l1.5-1.5 4.1.3 3.6-3.6z"/></svg>',
   heart: '<svg class="fav" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.5 8 3.3 4.5 6.7 4.5c2.1 0 3.4 1.1 4.3 2.4.9-1.3 2.2-2.4 4.3-2.4 3.4 0 5.2 3.5 4 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>',
   album: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="2.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/><circle cx="15.5" cy="9.5" r="1.6"/></svg>',
@@ -154,6 +156,36 @@ function setSync(state, arg) {
   el.classList.toggle('err', state === 'error');
   el.classList.toggle('info', state === 'throttle');
   el.textContent = state ? t(`sync.${state}`, { s: arg }) : '';
+  el.setAttribute('role', state === 'error' ? 'button' : 'status');
+  el.title = state === 'error' ? t('saveErr.tap') : '';
+}
+
+/** "Save failed" tapped: what went wrong, what's waiting, and a way out. */
+function saveErrorSheet() {
+  const e = S.saveErr;
+  if (!e) return;
+  const sh = openSheet(`<h2>${t('saveErr.title')}</h2>
+    <p class="sheet-p">${t('saveErr.body', { n: S.pending.length })}</p>
+    <div class="code-box err-box" id="seMsg">${esc(e.msg)}${e.status ? ` (HTTP ${e.status})` : ''}</div>
+    <p class="set-note" style="margin:10px 4px 0">${esc(describe(S.pending))} · ${t('saveErr.tries', { n: e.tries })}</p>
+    <div class="actions"><button class="btn btn-quiet" id="seCopy">${t('saveErr.copy')}</button><button class="btn btn-primary" id="seRetry">${t('common.retry')}</button></div>
+    <button class="btn btn-danger btn-block" id="seDrop" style="margin-top:10px">${t('saveErr.discard')}</button>`, { kind: 'saveerr' });
+  $('#seRetry', sh).onclick = () => { closeSheet(); flush(); };
+  $('#seCopy', sh).onclick = async () => {
+    const text = `Moa save error\n${S.space.owner}/${S.space.repo}\n${e.msg} ${e.status || ''}\nops: ${JSON.stringify(S.pending.map(o => o.op))}\n${new Date(e.at).toISOString()}`;
+    try { await navigator.clipboard.writeText(text); toast(t('common.copied')); } catch { getSelection().selectAllChildren($('#seMsg', sh)); }
+  };
+  $('#seDrop', sh).onclick = async () => {
+    if (!confirm(t('saveErr.discardConfirm', { n: S.pending.length }))) return;
+    S.pending = [];
+    savePending();
+    S.saveErr = null;
+    closeSheet();
+    setSync('loading');
+    await serial(() => refresh()).catch(() => {});
+    setSync(null);
+    toast(t('saveErr.discarded'));
+  };
 }
 
 // ---------------- system notifications: a long job finished while Moa was in the background ----------------
@@ -734,7 +766,9 @@ function edit(op) {
   savePending();
   scheduleFlush();
   rerender();
-  if (op.op === 'trashPhotos' || op.op === 'deletePhotos') { if (!$('#viewer').hidden) refreshViewer(); } // on to the next photo
+  if ($('#viewer').hidden) return;
+  if (op.op === 'trashPhotos' || op.op === 'deletePhotos') refreshViewer(); // on to the next photo
+  else if (V.p) { viewerChrome(); if (V.info) renderInfo(); } // what was tapped shows at once (not after the save)
 }
 
 function scheduleFlush(ms = 2500) {
@@ -747,7 +781,7 @@ function scheduleFlush(ms = 2500) {
 function describe(ops) {
   const n = ops.length;
   const kinds = [...new Set(ops.map(o => o.op))];
-  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title', replacePhoto: 'replace photo', trashPhotos: 'move to Recently deleted', restorePhotos: 'restore' };
+  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title', replacePhoto: 'replace photo', trashPhotos: 'move to Recently deleted', restorePhotos: 'restore', pinComment: 'caption', setLive: 'Live Photo motion', aiTags: 'auto tags' };
   return `Moa: ${kinds.map(k => names[k] || k).join(', ')}${n > 1 ? ` (${n})` : ''}${S.me?.login ? ` — @${S.me.login}` : ''}`;
 }
 
@@ -765,11 +799,33 @@ function flush() {
       savePending();
       if (S.pending.length) firstPendingAt = Date.now();
       adopt(r);
+      S.saveErr = null;
       setSync(S.pending.length ? 'pending' : null);
       if (S.pending.length) scheduleFlush(400);
     } catch (e) {
       if (S.space !== sp) return;
       console.error(e);
+      const tries = (S.saveErr?.tries || 0) + 1;
+      S.saveErr = { msg: errMsg(e), status: e.status, at: Date.now(), tries };
+      // GitHub keeps refusing the same batch (not the network, not a race): find the one change it can't take
+      if (tries >= 3 && ops.length && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403 && e.status !== 409) {
+        try {
+          const r = await S.gh.commit({ ops: [ops[0]], message: describe([ops[0]]), base: S.base, title: S.index?.title });
+          if (S.space !== sp) return;
+          S.pending = S.pending.slice(1); // that one was fine; the rest try again next
+          adopt(r);
+        } catch (e1) {
+          if (S.space !== sp) return;
+          if (e1.status >= 400 && e1.status < 500 && e1.status !== 409) {
+            console.warn('Moa: skipping a change GitHub refuses', ops[0], e1);
+            S.pending = S.pending.slice(1);
+            toast(t('saveErr.skipped', { what: describe([ops[0]]) }), 5000);
+          }
+        }
+        savePending();
+        if (S.pending.length) scheduleFlush(1500); else { S.saveErr = null; setSync(null); }
+        return;
+      }
       setSync('error');
       toast(t('save.failed', { e: errMsg(e) }), 4000);
       flushTimer = setTimeout(flush, 20000);
@@ -1078,16 +1134,12 @@ function renderToolbar(all) {
   const views = ['date', 'place', 'map', 'tag'];
   $$('#viewSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
   $('#segThumb').style.transform = `translateX(${views.indexOf(S.view) * 100}%)`;
-  const ctl = $('#controls');
-  if (S.view === 'date') {
-    ctl.innerHTML = `<select data-ctl="order" aria-label="${t('sort')}"><option value="desc">${t('sort.newest')}</option><option value="asc">${t('sort.oldest')}</option></select>`;
-    ctl.querySelector('select').value = S.order;
-  } else if (S.view === 'place') {
-    ctl.innerHTML = `<select data-ctl="placeLevel" aria-label="${t('place.level')}"><option value="country">${t('place.country')}</option><option value="city">${t('place.city')}</option><option value="district">${t('place.district')}</option></select>
-      <select data-ctl="placeOrder" aria-label="${t('sort')}"><option value="recent">${t('place.recent')}</option><option value="count">${t('place.count')}</option><option value="name">${t('place.name')}</option></select>`;
-    ctl.querySelector('[data-ctl=placeLevel]').value = S.placeLevel;
-    ctl.querySelector('[data-ctl=placeOrder]').value = S.placeOrder;
-  } else ctl.innerHTML = '';
+  // sort / grouping choices lead the chip row, so they never wrap under the view switcher
+  const sel = (key, label, opts) => `<select class="chip-select" data-ctl="${key}" aria-label="${label}">${opts.map(([v, l]) => `<option value="${v}"${S[key] === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+  const ctlHTML = S.view === 'date' ? sel('order', t('sort'), [['desc', t('sort.newest')], ['asc', t('sort.oldest')]])
+    : S.view === 'place' ? sel('placeLevel', t('place.level'), [['country', t('place.country')], ['city', t('place.city')], ['district', t('place.district')]]) + sel('placeOrder', t('sort'), [['recent', t('place.recent')], ['count', t('place.count')], ['name', t('place.name')]])
+    : '';
+  $('#controls').innerHTML = '';
 
   const f = S.filter;
   const lives = all.filter(p => p.files?.live).length;
@@ -1095,14 +1147,14 @@ function renderToolbar(all) {
   const favs = all.filter(p => p.likes?.length).length;
   const counted = C.tagCounts(all);
   const tags = [...counted.filter(([tg]) => C.isSymbolTag(tg)), ...counted.filter(([tg]) => !C.isSymbolTag(tg))].slice(0, 40);
-  $('#chips').innerHTML = [
+  $('#chips').innerHTML = (ctlHTML ? ctlHTML + '<span class="chip-sep" aria-hidden="true"></span>' : '') + [
     f.area ? `<button class="chip on scope" data-chip="area" aria-label="${t('area.clear')}">${ICON.pin}${esc(f.area.label)} <span class="x">✕</span></button>` : '',
     f.month ? `<button class="chip on scope" data-chip="month" aria-label="${t('area.clear')}">${esc(fmtMonth(f.month))} <span class="x">✕</span></button>` : '',
     `<button class="chip${!f.kind && !f.tag && !f.ai && !f.area && !f.month ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
     videos ? `<button class="chip${f.kind === 'photo' ? ' on' : ''}" data-chip="kind" data-v="photo">${t('chip.photos')} <span class="n">${all.length - videos}</span></button>` : '',
     lives ? `<button class="chip${f.kind === 'live' ? ' on' : ''}" data-chip="kind" data-v="live">${ICON.live}LIVE <span class="n">${lives}</span></button>` : '',
     videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">${t('chip.videos')} <span class="n">${videos}</span></button>` : '',
-    favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ ${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
+    favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">${ICON.heartSolid}${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
     ...tags.map(([tg, n]) => `<button class="chip${C.isSymbolTag(tg) ? ' mark' : ''}${f.tag === tg ? ' on' : ''}" data-chip="tag" data-v="${esc(tg)}">${esc(tagLabel(tg))} <span class="n">${n}</span></button>`),
     ...C.aiTagCounts(all).slice(0, 20).map(([k, n]) => `<button class="chip ai${f.ai === k ? ' on' : ''}" data-chip="ai" data-v="${esc(k)}">${ICON.spark}${esc(labelName(k, lang()))} <span class="n">${n}</span></button>`),
   ].join('');
@@ -1291,7 +1343,7 @@ function renderSettings() {
 }
 
 /** A row that opens a group of settings. */
-const groupRow = (key, icon, title, sub) => `<button class="row row-btn group-row" data-setpage="${key}"><span class="group-ic ${key}">${icon}</span><span class="grow"><b>${title}</b><small>${sub}</small></span><span class="val">›</span></button>`;
+const groupRow = (key, icon, title, sub) => `<button class="row row-btn group-row" data-setpage="${key}"><span class="group-ic gi-${key}">${icon}</span><span class="grow"><b>${title}</b><small>${sub}</small></span><span class="val">›</span></button>`;
 const subHead = title => `<div class="hero sub-hero"><div style="min-width:0"><button class="back" data-act="setBack">${ICON.back}${t('tab.settings')}</button><h1>${title}</h1></div></div>`;
 
 function settingsHome() {
@@ -2606,6 +2658,7 @@ function closeViewer(fromPop = false) {
   const viewer = $('#viewer');
   if (viewer.hidden || V.closing) return;
   V.closing = true;
+  resetZoom();
   stopLive();
   $('#vVideo').pause();
   const media = $('#vMedia'), bd = $('#vBackdrop');
@@ -2659,6 +2712,9 @@ function viewerChrome() {
   $('#vLike').classList.toggle('on', !!liked);
   $('#vLike span').textContent = p.likes?.length || '';
   $('#vCmt span').textContent = p.comments?.length || '';
+  const cap = $('#vCap');
+  cap.innerHTML = p.caption ? `<b>@${esc(p.captionBy || p.by || '')}</b> ${esc(p.caption)}` : '';
+  cap.hidden = !p.caption;
   $('#vTags').innerHTML = (p.tags || []).map(t => `<button data-vtag="${esc(t)}">#${esc(t)}</button>`).join('');
   $('#livePill').hidden = !p.files?.live;
   $('[data-v=prev]').disabled = V.i <= 0;
@@ -2668,6 +2724,7 @@ function viewerChrome() {
 async function showCurrent() {
   const p = V.p = currentPhoto();
   if (!p) return closeViewer();
+  resetZoom();
   const token = ++V.token;
   stopLive();
   viewerChrome();
@@ -2759,6 +2816,164 @@ function stopLive() {
   stage().classList.remove('live-on');
 }
 
+// ---------------- zoom: pinch, double-tap, pan (photos) ----------------
+
+const Z = { s: 1, x: 0, y: 0, pinch: null, pan: null, ptrs: new Map(), lastTap: null, tapTimer: 0 };
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const zoomable = () => V.p && V.p.kind !== 'video' && !$('#vImg').hidden;
+
+function applyZoom() {
+  const img = $('#vImg');
+  img.style.transform = Z.s === 1 && !Z.x && !Z.y ? '' : `translate(${Z.x}px, ${Z.y}px) scale(${Z.s})`;
+  stage().classList.toggle('zoomed', Z.s > 1.01);
+}
+/** How far a photo at scale s may move before its edge would come away from the screen's. */
+function zoomBounds(s) {
+  const r = stage().getBoundingClientRect(), img = $('#vImg');
+  const nw = img.naturalWidth || r.width, nh = img.naturalHeight || r.height;
+  const k = Math.min(r.width / nw, r.height / nh);
+  return { mx: Math.max(0, (nw * k * s - r.width) / 2), my: Math.max(0, (nh * k * s - r.height) / 2) };
+}
+function zoomTo(s, x, y, animate = true) {
+  const img = $('#vImg'), from = img.style.transform || 'none';
+  Z.s = clamp(s, 1, 5);
+  const b = zoomBounds(Z.s);
+  Z.x = clamp(x, -b.mx, b.mx); Z.y = clamp(y, -b.my, b.my);
+  applyZoom();
+  if (animate && !reduceMotion()) img.animate([{ transform: from }, { transform: img.style.transform || 'none' }], { duration: 320, easing: EASE_DRAWER });
+}
+function resetZoom() {
+  Object.assign(Z, { s: 1, x: 0, y: 0, pinch: null, pan: null });
+  Z.ptrs.clear();
+  applyZoom();
+}
+/** Past the edge the photo follows less and less (rubber-band), like Photos. */
+const rubber = (v, lim) => (Math.abs(v) <= lim ? v : Math.sign(v) * (lim + (Math.abs(v) - lim) * 0.35));
+
+/** Zoom handles two-finger gestures, and one-finger drags while zoomed in; the swipe/close gestures get the rest. */
+function zoomOwns(e) {
+  if (!zoomable()) return false;
+  return Z.ptrs.size >= 1 || Z.s > 1.01;
+}
+
+/** Single tap: show/hide the controls. Double tap: zoom to 2.5× there, or back out. */
+function tapped(e) {
+  const now = performance.now();
+  const last = Z.lastTap;
+  if (zoomable() && last && now - last.t < 300 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
+    clearTimeout(Z.tapTimer);
+    Z.lastTap = null;
+    if (Z.s > 1.01) return zoomTo(1, 0, 0);
+    const r = stage().getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2, s = 2.5;
+    return zoomTo(s, (cx - e.clientX) * (s - 1), (cy - e.clientY) * (s - 1));
+  }
+  Z.lastTap = { t: now, x: e.clientX, y: e.clientY };
+  clearTimeout(Z.tapTimer);
+  // wait a moment in case it's a double tap (only photos can double-tap)
+  Z.tapTimer = setTimeout(() => $('#viewer').classList.toggle('bare'), zoomable() ? 260 : 0);
+}
+
+function bindZoom() {
+  const st = stage();
+  const center = () => { const r = st.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+  const pair = () => { const [a, b] = [...Z.ptrs.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, m: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } }; };
+  st.addEventListener('pointerdown', e => {
+    if (!zoomable() || e.target.closest('button') || V.closing) return;
+    Z.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { st.setPointerCapture(e.pointerId); } catch { /* synthetic or already released */ }
+    if (Z.ptrs.size === 2) {
+      clearTimeout(V.hold);
+      const { d, m } = pair();
+      Z.pinch = { d0: d, s0: Z.s, x0: Z.x, y0: Z.y, m0: m };
+      Z.pan = null;
+      $('#vImg').getAnimations().forEach(a => a.cancel());
+    } else if (Z.ptrs.size === 1 && Z.s > 1.01) {
+      Z.pan = { x: e.clientX, y: e.clientY, x0: Z.x, y0: Z.y, t: performance.now(), moved: false };
+    }
+  });
+  st.addEventListener('pointermove', e => {
+    if (!Z.ptrs.has(e.pointerId)) return;
+    Z.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (Z.pinch && Z.ptrs.size >= 2) {
+      const { d, m } = pair(), P = Z.pinch, c = center();
+      // keep the spot that was under the fingers under the fingers
+      let s = P.s0 * d / P.d0;
+      s = s < 1 ? 1 - (1 - s) * 0.4 : Math.min(s, 6);
+      const qx = (P.m0.x - c.x - P.x0) / P.s0, qy = (P.m0.y - c.y - P.y0) / P.s0;
+      Z.s = s; Z.x = m.x - c.x - s * qx; Z.y = m.y - c.y - s * qy;
+      applyZoom();
+    } else if (Z.pan) {
+      const b = zoomBounds(Z.s), dx = e.clientX - Z.pan.x, dy = e.clientY - Z.pan.y;
+      if (Math.hypot(dx, dy) > 6) Z.pan.moved = true;
+      Z.x = rubber(Z.pan.x0 + dx, b.mx); Z.y = rubber(Z.pan.y0 + dy, b.my);
+      applyZoom();
+    }
+  });
+  const up = e => {
+    if (!Z.ptrs.has(e.pointerId)) return;
+    Z.ptrs.delete(e.pointerId);
+    if (Z.pinch && Z.ptrs.size < 2) {
+      Z.pinch = null;
+      Z.ptrs.clear(); // the finger still down starts nothing new until it lifts
+      if (Z.s < 1.05) zoomTo(1, 0, 0); else zoomTo(Z.s, Z.x, Z.y);
+    } else if (Z.pan && !Z.ptrs.size) {
+      const pan = Z.pan;
+      Z.pan = null;
+      if (!pan.moved && performance.now() - pan.t < 230) tapped(e);
+      else zoomTo(Z.s, Z.x, Z.y); // settle inside the edges
+    }
+  };
+  st.addEventListener('pointerup', up);
+  st.addEventListener('pointercancel', up);
+  // trackpad pinch / ctrl + wheel on a computer
+  st.addEventListener('wheel', e => {
+    if (!e.ctrlKey || !zoomable()) return;
+    e.preventDefault();
+    const c = center(), s = clamp(Z.s * Math.exp(-e.deltaY * 0.01), 1, 5);
+    const qx = (e.clientX - c.x - Z.x) / Z.s, qy = (e.clientY - c.y - Z.y) / Z.s;
+    zoomTo(s, e.clientX - c.x - s * qx, e.clientY - c.y - s * qy, false);
+  }, { passive: false });
+}
+
+// ---------------- who liked it (press and hold the heart) ----------------
+
+function likersSheet(p) {
+  if (!p?.likes?.length) return toast(t('like.none'));
+  openSheet(`<h2>${t('like.title')} <small>${p.likes.length}</small></h2><div class="panel">${p.likes.map(l => `<div class="row"><img class="avatar" alt="" src="${esc(avatar(l))}"><div class="grow"><b>@${esc(l)}</b></div>${ICON.heartSolid}</div>`).join('')}</div>`, { kind: 'likers' });
+}
+
+// ---------------- Live Photo motion added after the still ----------------
+
+function pickLiveVideo(p) {
+  if (U.running || CONV.running) return toast(t('up.busy'));
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'video/*,.mov,.mp4';
+  inp.onchange = () => { if (inp.files[0]) attachLive(p, inp.files[0]); };
+  inp.click();
+}
+
+async function attachLive(p, file) {
+  const sp = S.space;
+  if (file.size > LIM.LIMITS.objectHard) return toast(t('live.tooBig'), 4000);
+  const sh = openSheet(`<h2>${t('live.adding')}</h2><div class="progress"><i style="transform:scaleX(.5)"></i></div>`, { kind: 'replace-run' });
+  try {
+    const ext = C.extOf(file.name) || 'mov';
+    const path = S.gh.sealed ? C.sealedPath() : `media/${C.mediaDir(p.takenAt)}/${p.id}.live.${ext}`;
+    const sha = await S.gh.putMedia(path, file);
+    const mime = file.type || (ext === 'mp4' ? 'video/mp4' : 'video/quicktime');
+    await serial(async () => {
+      const r = await S.gh.commit({ files: [{ path, sha }], ops: [{ op: 'setLive', id: p.id, path, mime, size: file.size }], message: `Moa: Live Photo motion for ${p.name || 'photo'} — @${S.me.login}`, base: S.base, title: S.index?.title });
+      if (S.space === sp) adopt(r);
+    });
+    if (sheetOpen() && sh.dataset.kind === 'replace-run') closeSheet();
+    toast(t('live.added'));
+  } catch (err) {
+    if (sheetOpen() && sh.dataset.kind === 'replace-run') closeSheet();
+    toast(t('replace.failed', { e: errMsg(err) }), 5000);
+  }
+}
+
 function bindViewer() {
   const st = stage(), media = $('#vMedia');
   $('#vLive').addEventListener('ended', () => stage().classList.remove('live-on'));
@@ -2767,14 +2982,15 @@ function bindViewer() {
   pill.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') playLive(false); });
 
   st.addEventListener('pointerdown', e => {
-    if (V.down || V.closing || e.button > 0 || e.target.closest('button') || e.target.id === 'vVideo') return;
+    if (V.down || V.closing || e.button > 0 || e.target.closest('button') || e.target.id === 'vVideo' || zoomOwns(e)) return;
     V.down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, axis: null, dx: 0, dy: 0 };
-    st.setPointerCapture?.(e.pointerId);
+    try { st.setPointerCapture(e.pointerId); } catch { /* synthetic or already released */ }
     if (V.p?.files?.live) V.hold = setTimeout(() => { V.holding = true; playLive(true); }, 230);
   });
   st.addEventListener('pointermove', e => {
     const d = V.down;
     if (!d || e.pointerId !== d.id || V.holding) return;
+    if (Z.pinch) { V.down = null; clearTimeout(V.hold); return settle(); } // a second finger turned it into a pinch
     let dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (!d.axis) {
       if (Math.hypot(dx, dy) < 10) return;
@@ -2820,7 +3036,7 @@ function bindViewer() {
       const v = d.dy / dt;
       if (d.dy > 110 || (d.dy > 20 && v > 0.11)) closeViewer(); // a flick is enough
       else settle();
-    } else if (!d.axis && performance.now() - d.t < 230) $('#viewer').classList.toggle('bare');
+    } else if (!d.axis && performance.now() - d.t < 230) tapped(e);
   };
   st.addEventListener('pointerup', end);
   st.addEventListener('pointercancel', end);
@@ -2843,6 +3059,7 @@ function bindViewer() {
       case 'info': return toggleInfo();
       case 'comments': toggleInfo(true); setTimeout(() => $('#iCmt')?.focus(), 80); return;
       case 'like': {
+        if (V.likeHeld) { V.likeHeld = false; return; } // that was a long press: the list of likers
         const on = !p.likes?.includes(S.me.login);
         edit({ op: 'like', id: p.id, user: S.me.login, on });
         viewerChrome();
@@ -2852,6 +3069,15 @@ function bindViewer() {
       case 'download': return download(p);
     }
   });
+
+  // like Instagram: tap the heart to like, press and hold it to see who did
+  const like = $('#vLike');
+  like.addEventListener('pointerdown', () => {
+    clearTimeout(V.likeTimer);
+    V.likeTimer = setTimeout(() => { V.likeHeld = true; likersSheet(V.p); }, 450);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) like.addEventListener(ev, () => clearTimeout(V.likeTimer));
+  like.addEventListener('contextmenu', e => e.preventDefault());
 
   document.addEventListener('keydown', e => {
     if ($('#viewer').hidden || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) {
@@ -2866,11 +3092,68 @@ function bindViewer() {
   });
 }
 
+const wideViewer = () => matchMedia('(min-width: 900px)').matches;
+
+/** The info panel slides up (a side panel on wide screens) and back down the same way; it can be dragged down to close. */
 function toggleInfo(force) {
-  V.info = force ?? !V.info;
-  $('#vInfo').hidden = !V.info;
-  $('#viewer').classList.toggle('info-open', V.info);
-  if (V.info) renderInfo(); else { V.miniMap?.remove(); V.miniMap = null; }
+  const open = force ?? !V.info;
+  const box = $('#vInfo');
+  if (open === V.info && (open ? !box.hidden : box.hidden)) return;
+  const off = wideViewer() ? 'translateX(100%)' : 'translateY(100%)';
+  const from = box.style.transform || 'none';
+  box.getAnimations().forEach(a => a.cancel());
+  box.style.transform = '';
+  V.info = open;
+  $('#viewer').classList.toggle('info-open', open);
+  if (open) {
+    V.tagOpen = false;
+    box.hidden = false;
+    renderInfo({ force: true });
+    if (!reduceMotion()) box.animate([{ transform: from === 'none' ? off : from }, { transform: 'none' }], { duration: 380, easing: EASE_DRAWER });
+  } else {
+    if (infoTyping()) document.activeElement.blur();
+    const done = () => { if (!V.info) { box.hidden = true; V.miniMap?.remove(); V.miniMap = null; } };
+    if (reduceMotion()) return done();
+    box.animate([{ transform: from }, { transform: off }], { duration: 260, easing: EASE_OUT }).finished.then(done, done);
+  }
+}
+
+function bindInfoDrag() {
+  const box = $('#vInfo');
+  let d = null;
+  box.addEventListener('touchstart', e => {
+    if (wideViewer() || e.touches.length > 1 || e.target.closest('input, textarea, select, .mini-map')) return;
+    const y = e.touches[0].clientY;
+    d = { y, lastY: y, lastT: performance.now(), v: 0, dy: 0, active: false };
+  }, { passive: true });
+  box.addEventListener('touchmove', e => {
+    if (!d) return;
+    const y = e.touches[0].clientY, dy = y - d.y, now = performance.now();
+    if (!d.active) {
+      // only a pull down from the top of the panel closes it; anything else scrolls
+      if (box.scrollTop > 0 || dy < -4) { d = null; return; }
+      if (dy < 8) return;
+      d.active = true;
+    }
+    e.preventDefault();
+    d.v = (y - d.lastY) / Math.max(1, now - d.lastT);
+    d.lastY = y; d.lastT = now;
+    d.dy = Math.max(0, dy - 8);
+    box.style.transform = `translateY(${d.dy}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (!d?.active) { d = null; return; }
+    const { dy, v } = d;
+    d = null;
+    if (dy > 90 || v > 0.45) return toggleInfo(false); // a flick is enough
+    const from = box.style.transform;
+    box.style.transform = '';
+    box.animate([{ transform: from }, { transform: 'none' }], { duration: 300, easing: EASE_DRAWER });
+  };
+  box.addEventListener('touchend', end);
+  box.addEventListener('touchcancel', end);
+  // something changed while typing: catch up once the field is left
+  box.addEventListener('focusout', () => setTimeout(() => { if (V.info && V.infoStale && !infoTyping()) renderInfo(); }, 0));
 }
 
 async function download(p) {
@@ -2886,37 +3169,56 @@ async function download(p) {
   } catch (e) { toast(t('dl.failed', { e: errMsg(e) })); }
 }
 
-function renderInfo() {
+/** Typing in the panel: a re-render now would drop the text and the keyboard, so wait for blur. */
+const infoTyping = () => { const a = document.activeElement; return !!a && $('#vInfo').contains(a) && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type !== 'checkbox')); };
+
+function commentHTML(p, c, pinned, w) {
+  const mine = c.by === S.me?.login;
+  return `<div class="cmt${pinned ? ' pinned' : ''}">${pinned ? `<span class="pin-ic" aria-label="${t('cmt.pinned')}">${ICON.pinned}</span>` : ''}<b>@${esc(c.by || '')}</b><small>${c.at ? fmtDate(c.at) : ''}</small>
+    <span class="cmt-acts">${w && c.id ? `<button data-i="${pinned ? 'unpin' : 'pin'}" data-c="${esc(c.id)}">${t(pinned ? 'cmt.unpin' : 'cmt.pin')}</button>` : ''}${w && pinned && !c.id ? `<button data-i="unpin">${t('cmt.unpin')}</button>` : ''}${mine && c.id ? `<button data-i="uncomment" data-c="${esc(c.id)}">${t('common.delete')}</button>` : ''}</span>
+    <div class="cmt-text">${esc(c.text)}</div></div>`;
+}
+
+function renderInfo({ force = false } = {}) {
   const p = V.p;
   if (!p) return;
+  if (!force && infoTyping()) { V.infoStale = true; return; }
+  V.infoStale = false;
   const box = $('#vInfo');
   const scroll = box.scrollTop;
   const albums = Object.entries(S.index.albums);
-  const allTags = C.tagCounts(photos()).map(([tg]) => tg).filter(tg => !C.isSymbolTag(tg) && !(p.tags || []).includes(tg)).slice(0, 10);
+  const recent = C.tagCounts(photos()).map(([tg]) => tg).filter(tg => !C.isSymbolTag(tg) && !(p.tags || []).includes(tg)).slice(0, 12);
   const words = (p.tags || []).filter(tg => !C.isSymbolTag(tg));
   const day = (p.takenAt || '').slice(0, 10);
   const cam = [p.camera?.model || p.camera?.make, p.camera?.lens && p.camera.lens.replace(p.camera.model || '', '').trim()].filter(Boolean).join(' · ');
   const sizes = [p.w && p.h ? `${p.w} × ${p.h}` : '', p.size ? C.fmtBytes(p.size) : '', p.duration ? fmtDur(p.duration) : '', p.name].filter(Boolean).join(' · ');
   const w = S.canWrite;
-  box.innerHTML = `<div class="grab"></div>
-    ${w ? `<textarea id="iCap" rows="1" placeholder="${t('info.caption')}" maxlength="500">${esc(p.caption || '')}</textarea>` : p.caption ? `<div class="kv">${esc(p.caption)}</div>` : ''}
+  // the caption is a pinned comment; an older caption shows the same way
+  const comments = p.comments || [];
+  const pinned = p.pinned ? comments.find(c => c.id === p.pinned) : p.caption ? { text: p.caption, by: p.captionBy || p.by } : null;
+  const rest = comments.filter(c => c !== pinned);
+  const hasTags = words.length || marksOf(p).length;
+  box.innerHTML = `<div class="grab" aria-hidden="true"></div>
+    <h4>${t('info.comments')} ${comments.length || ''}</h4>
+    <div class="cmts">${pinned ? commentHTML(p, pinned, true, w) : ''}${rest.map(c => commentHTML(p, c, false, w)).join('')}</div>
+    ${w ? `<input type="text" id="iCmt" placeholder="${t('info.addComment')}" enterkeyhint="send" maxlength="500">${!pinned ? `<p class="hint">${t('cmt.pinHint')}</p>` : ''}` : ''}
+    <h4>${t('info.tags')} ${w ? `<button data-i="tagOpen" aria-expanded="${!!V.tagOpen}">${V.tagOpen ? t('common.done') : t('tags.add')}</button>` : ''}</h4>
+    ${hasTags && !V.tagOpen ? `<div class="tagrow">${marksOf(p).map(m => `<span class="mark-on">${esc(m)}</span>`).join('')}${words.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
+    ${!hasTags && !V.tagOpen ? `<div class="kv"><small>${t('tags.none')}</small></div>` : ''}
+    ${w && V.tagOpen ? `<div class="tag-editor">
+      ${marksRowHTML(marksOf(p), marksOf(p))}
+      ${words.length ? `<div class="tagrow">${words.map(tg => `<span class="chip">#${esc(tg)}<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button></span>`).join('')}</div>` : ''}
+      <input type="text" id="iTag" placeholder="${t('info.addTag')}" enterkeyhint="done" autocomplete="off">
+      <div class="tag-suggest" id="iTagSug"></div>
+      ${recent.length ? `<p class="hint">${t('tags.recent')}</p><div class="tag-suggest">${recent.map(tg => `<button class="chip" data-i="tag" data-t="${esc(tg)}">+ ${esc(tg)}</button>`).join('')}</div>` : ''}
+    </div>` : ''}
     ${p.ai?.length ? `<h4>${t('ai.tags')}</h4><div class="tagrow">${p.ai.map(k => `<span class="chip ai">${ICON.spark}${esc(labelName(k, lang()))}${w ? `<button data-i="unai" data-t="${esc(k)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
-    <h4>${t('info.tags')}</h4>
-    ${w ? marksRowHTML(marksOf(p), marksOf(p)) : marksOf(p).length ? `<div class="marks-row">${marksOf(p).map(m => `<span class="mark on">${esc(m)}</span>`).join('')}</div>` : ''}
-    ${words.length ? `<div class="tagrow">${words.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
-    ${w ? `<input type="text" id="iTag" placeholder="${t('info.addTag')}" enterkeyhint="done" autocomplete="off">
-    <div class="tag-suggest" id="iTagSug"></div>
-    ${allTags.length ? `<div class="tag-suggest">${allTags.map(tg => `<button class="chip" data-i="tag" data-t="${esc(tg)}">+ ${esc(tg)}</button>`).join('')}</div>` : ''}` : ''}
     <h4>${t('info.date')} ${w ? `<button data-i="editDate">${t('common.edit')}</button>` : ''}</h4>
     <div class="kv" id="iDate">${/^\d{4}-\d{2}-\d{2}$/.test(day) ? fmtDay(day) : '—'} ${fmtTime(p.takenAt)}${p.tz ? `<small>UTC${p.tz}</small>` : ''}</div>
     <h4>${t('info.place')} ${w ? `<button data-i="editPlace">${t('common.edit')}</button>` : ''}</h4>
     <div id="iPlace">${p.gps ? `<div class="kv">${esc(p.place?.name || p.place?.label || '…')}<small>${esc([p.place?.name && p.place?.label, p.place?.country].filter(Boolean).join(', ') || `${p.gps.lat.toFixed(4)}, ${p.gps.lng.toFixed(4)}`)}</small></div><div class="mini-map" id="iMap"></div><button class="text-btn" data-i="onMap" style="padding-left:0;margin-top:4px">${t('info.onMap')}</button>` : '<div class="kv"><small>—</small></div>'}</div>
     <h4>${t('tab.albums')}</h4>
     <div>${albums.map(([id, a]) => `<label class="alb"><input type="checkbox" data-i="alb" data-a="${esc(id)}"${(p.albums || []).includes(id) ? ' checked' : ''}${w ? '' : ' disabled'}>${esc(a.name)}</label>`).join('')}${w ? `<button class="text-btn" data-i="newAlbum" style="padding-left:0">+ ${t('newAlbum.title')}</button>` : ''}</div>
-    ${p.likes?.length ? `<h4>${t('chip.liked')} ${p.likes.length}</h4><div class="kv">${p.likes.map(l => '@' + esc(l)).join(', ')}</div>` : ''}
-    <h4>${t('info.comments')} ${p.comments?.length || ''}</h4>
-    <div>${(p.comments || []).map(c => `<div class="cmt"><b>@${esc(c.by)}</b><small>${fmtDate(c.at)}</small>${c.by === S.me?.login ? `<button class="del" data-i="uncomment" data-c="${esc(c.id)}">${t('common.delete')}</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')}</div>
-    ${w ? `<input type="text" id="iCmt" placeholder="${t('info.addComment')}" enterkeyhint="send" maxlength="500" style="margin-top:8px">` : ''}
     <h4>${t('info.details')}</h4>
     ${cam ? `<div class="kv">${esc(cam)}</div>` : ''}
     <div class="kv"><small>${esc(sizes)}</small></div>
@@ -2924,6 +3226,7 @@ function renderInfo() {
     <div class="danger-zone">
       <button class="btn btn-quiet btn-sm" data-i="download">${t(p.files.original ? 'info.dlOriginal' : 'info.dlJpeg')}</button>
       ${p.files.live ? `<button class="btn btn-quiet btn-sm" data-i="downloadLive">${t('info.dlLive')}</button>` : ''}
+      ${w && p.kind !== 'video' && !p.files.live ? `<button class="btn btn-quiet btn-sm" data-i="addLive">${t('live.add')}</button>` : ''}
       ${w && S.album ? `<button class="btn btn-quiet btn-sm" data-i="cover">${t('info.setCover')}</button>` : ''}
       ${w && !S.album ? `<button class="btn btn-quiet btn-sm" data-i="mainCover">${t('cover.setMain')}</button>` : ''}
       ${w ? `<button class="btn btn-quiet btn-sm" data-i="replace">${t('replace.btn')}</button>` : ''}
@@ -2938,28 +3241,24 @@ function renderInfo() {
     L.circleMarker([p.gps.lat, p.gps.lng], { radius: 7, color: '#fff', weight: 2.5, fillColor: '#2997ff', fillOpacity: 1 }).addTo(m);
   }
 
-  const cap = $('#iCap', box);
-  if (cap) {
-    cap.onchange = () => { const v = cap.value.trim(); if (v !== (p.caption || '')) edit({ op: 'updatePhoto', id: p.id, set: { caption: v } }); };
-  }
+  // Enter adds, the panel redraws right away and the field keeps focus (and the keyboard stays up)
+  const again = id => { renderInfo({ force: true }); $('#' + id)?.focus(); };
   const tagIn = $('#iTag', box);
-  if (tagIn) tagIn.onkeydown = e => {
-    if (e.key !== 'Enter' || e.isComposing) return;
-    e.preventDefault();
-    tagIn.value.split(/[,，]/).map(C.normalizeTag).filter(Boolean).forEach(t => edit({ op: 'tag', ids: [p.id], tag: t, on: true }));
-    tagIn.value = '';
-    setTimeout(() => $('#iTag')?.focus(), 90);
-  };
-  if (tagIn) bindTagSuggest(tagIn, $('#iTagSug', box), tg => {
-    edit({ op: 'tag', ids: [p.id], tag: tg, on: true });
-    tagIn.value = '';
-    setTimeout(() => $('#iTag')?.focus(), 90);
-  });
+  if (tagIn) {
+    tagIn.onkeydown = e => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      tagIn.value.split(/[,，]/).map(C.normalizeTag).filter(Boolean).forEach(tg => edit({ op: 'tag', ids: [p.id], tag: tg, on: true }));
+      again('iTag');
+    };
+    bindTagSuggest(tagIn, $('#iTagSug', box), tg => { edit({ op: 'tag', ids: [p.id], tag: tg, on: true }); again('iTag'); });
+  }
   const cmt = $('#iCmt', box);
   if (cmt) cmt.onkeydown = e => {
     if (e.key !== 'Enter' || e.isComposing || !cmt.value.trim()) return;
+    e.preventDefault();
     edit({ op: 'comment', id: p.id, comment: { id: C.newId(), by: S.me.login, at: new Date().toISOString(), text: cmt.value.trim() } });
-    cmt.value = '';
+    again('iCmt');
   };
   box.onclick = e => {
     const mk = w && e.target.closest('[data-mark]');
@@ -2967,23 +3266,26 @@ function renderInfo() {
     const b = e.target.closest('[data-i]');
     if (!b || b.tagName === 'INPUT' && b.type !== 'checkbox') return;
     switch (b.dataset.i) {
+      case 'tagOpen': V.tagOpen = !V.tagOpen; renderInfo({ force: true }); if (V.tagOpen) $('#iTag')?.focus(); return;
       case 'untag': return edit({ op: 'tag', ids: [p.id], tag: b.dataset.t, on: false });
       case 'unai': return edit({ op: 'aiTags', id: p.id, tags: (p.ai || []).filter(k => k !== b.dataset.t), v: p.aiv || AI_VERSION });
       case 'tag': return edit({ op: 'tag', ids: [p.id], tag: b.dataset.t, on: true });
       case 'alb': return edit({ op: 'albumMembership', ids: [p.id], album: b.dataset.a, on: b.checked });
       case 'newAlbum': return newAlbum(id => edit({ op: 'albumMembership', ids: [p.id], album: id, on: true }));
       case 'uncomment': return edit({ op: 'uncomment', id: p.id, commentId: b.dataset.c });
+      case 'pin': return edit({ op: 'pinComment', id: p.id, commentId: b.dataset.c });
+      case 'unpin': return edit({ op: 'pinComment', id: p.id, commentId: null });
       case 'editDate': return editDate(p);
       case 'editPlace': return editPlace(p);
       case 'onMap': closeViewer(); S.view = 'map'; S.mapFocus = [p.gps.lat, p.gps.lng]; S.album = null; S.filter = { kind: '', tag: '', q: '' }; showTab('photos'); return;
       case 'download': return download(p);
       case 'downloadLive': return download({ ...p, name: C.baseOf(p.name || p.id) + '.' + C.extOf(p.files.live), files: { original: p.files.live } });
+      case 'addLive': return pickLiveVideo(p);
       case 'cover': edit({ op: 'setCover', album: S.album, photo: p.id }); return toast(t('info.coverSet'));
       case 'mainCover': edit({ op: 'setCover', photo: p.id }); return toast(t('cover.mainSet'));
       case 'replace': return pickReplacement(p);
       case 'delete': {
-        const id = p.id;
-        deletePhotos([id], () => { if (V.list.length <= 1) closeViewer(); });
+        deletePhotos([p.id], () => { if (V.list.length <= 1) closeViewer(); });
       }
     }
   };
@@ -3081,8 +3383,12 @@ function showUploadSheet(review) {
       <div class="flags">${Math.max(m.size, e.live?.size || 0) >= LIM.LIMITS.apiUpload ? `<b class="big">${t('up.large')}</b>` : ''}${e.live ? '<b class="live">LIVE</b>' : ''}${m.kind === 'video' ? '<b>▶</b>' : ''}${m.meta.gps ? `<b class="gps">${t('info.place')}</b>` : ''}</div>
       <span class="nm">${esc(m.name)}</span>${statusHTML(e)}</div>`;
   }).join('');
+  // Live Photos picked straight from the iPhone photo library arrive as stills: say so, and how to keep the motion
+  const stills = go.filter(e => e.main.kind === 'photo' && !e.live && e.main.meta.contentId).length;
+  const liveTip = review && (stills || (IS_IOS() && go.some(e => e.main.kind === 'photo') && !go.some(e => e.live)));
   const sh = openSheet(`<h2>${review ? t('up.title', { n: go.length }) : t('up.uploading')} ${review ? '' : `<small id="upCount">${U.done}/${U.total}</small>`}</h2>
     <p class="up-summary">${summary}</p>
+    ${liveTip ? `<p class="up-hint">${stills ? t('live.hint', { n: stills }) : ''} <button class="text-btn" id="liveHow" type="button">${t('live.how')} ›</button></p>` : ''}
     ${review ? `<div id="upPlan">${uploadPlanHTML(E, prefs.keepOriginal).html}</div>` : ''}
     ${!review ? `<div class="progress"><i id="upBar" style="transform:scaleX(${U.total ? (U.done + U.failed) / U.total : 0})"></i></div>` : ''}
     <div class="up-list">${thumbs}</div>${E.length > 200 ? `<p class="up-summary">+${E.length - 200}</p>` : ''}
@@ -3094,6 +3400,7 @@ function showUploadSheet(review) {
       <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="upGo"${go.length ? '' : ' disabled'}>${t('up.go')}</button></div>` : ''}`,
   { kind: 'upload', onClose: () => { if (!U.running) cleanupUpload(); else updatePill(); } });
   $('#upPill').hidden = true;
+  $('#liveHow', sh)?.addEventListener('click', () => { const back = U.entries; openSheet(`<h2>${t('live.how')}</h2><p class="sheet-p">${t('live.howBody')}</p><button class="btn btn-primary btn-block" id="liveBack">${t('common.back')}</button>`); $('#liveBack').onclick = () => { U.entries = back; showUploadSheet(true); }; });
   $('#upStop', sh)?.addEventListener('click', e => { U.stop = true; e.target.disabled = true; e.target.textContent = t('up.stopping'); });
   if (review) {
     const gate = () => {
@@ -3561,7 +3868,7 @@ function bind() {
     if (S.view === 'map') setSelecting(false);
     render();
   };
-  $('#controls').onchange = e => { const k = e.target.dataset.ctl; if (k) { S[k] = e.target.value; renderPhotos(); } };
+  $('#controls').onchange = $('#chips').onchange = e => { const k = e.target.dataset.ctl; if (k) { S[k] = e.target.value; renderPhotos(); } };
   $('#chips').onclick = e => {
     const b = e.target.closest('[data-chip]');
     if (!b) return;
@@ -3696,7 +4003,10 @@ function bind() {
     if (e.dataTransfer?.files?.length && S.index) handleFiles(e.dataTransfer.files);
   });
 
+  $('#sync').addEventListener('click', () => { if ($('#sync').classList.contains('err')) saveErrorSheet(); });
   bindViewer();
+  bindInfoDrag();
+  bindZoom();
 }
 
 /** Text baked into index.html: data-i18n (text), data-i18n-aria, data-i18n-ph. */

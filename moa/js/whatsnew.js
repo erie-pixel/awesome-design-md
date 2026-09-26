@@ -6,6 +6,17 @@
 
 export const WHATS_NEW = [
   {
+    v: 4, date: '2026-09-27',
+    items: [
+      ['🔍 Pinch or double-tap to zoom into a photo, like Photos.', '🔍 사진 앱처럼 두 손가락으로 벌리거나 두 번 탭해서 확대해요.'],
+      ['💬 Captions are pinned comments: pin any comment to make it the caption shown under the photo.', '💬 캡션은 고정된 댓글이에요. 댓글을 고정하면 사진 아래에 캡션으로 보여요.'],
+      ['❤️ Tap the heart to like; press and hold it to see who liked.', '❤️ 하트를 눌러 좋아요, 꾹 누르면 누가 눌렀는지 보여요.'],
+      ['🏷️ Tags open with “+ Add”, showing the ones you used before.', '🏷️ 태그는 “+ 추가”를 누르면 열리고, 전에 쓴 태그를 보여줘요.'],
+      ['📷 A Live Photo that arrived as a still can get its motion added later (photo info → Add Live motion).', '📷 정지 사진으로 올라간 라이브 포토는 나중에 움직임을 붙일 수 있어요 (사진 정보 → 라이브 영상 붙이기).'],
+      ['🛟 Tap “Save failed” to see why, retry, or let go of the change.', '🛟 “저장 실패”를 누르면 이유를 보고 다시 시도하거나 변경을 버릴 수 있어요.'],
+    ],
+  },
+  {
     v: 3, date: '2026-09-26',
     items: [
       ['🗑️ Recently deleted: deleted photos wait 30 days before they go for good, so they can be restored (Albums → Recently deleted).', '🗑️ 최근 삭제된 항목: 지운 사진은 30일 동안 보관돼서 되살릴 수 있어요 (앨범 → 최근 삭제된 항목).'],

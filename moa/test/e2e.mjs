@@ -627,6 +627,44 @@ try {
   await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
   ok(true, 'friend needs the new passphrase once, then sees the photo');
 
+  // Face ID (a passkey with PRF, here Chromium's virtual authenticator) opens the album instead of the passphrase
+  const cdpB = await ctxB.newCDPSession(B);
+  await cdpB.send('WebAuthn.enable');
+  const authOpts = { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true };
+  let { authenticatorId } = await cdpB.send('WebAuthn.addVirtualAuthenticator', { options: authOpts });
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=passkey]');
+  await B.click('#pkAdd');
+  await until(() => { try { return JSON.parse(RE.fileText('album.json')).passkeys?.slots?.length === 1; } catch { return false; } }, 150000);
+  const hPk = JSON.parse(RE.fileText('album.json'));
+  ok(hPk.passkeys.slots[0].by === 'bob' && !!(await K.unlockAlbumKey(hPk, PASS4)), 'a passkey slot is added to the album; the passphrase still opens it');
+  await B.waitForSelector('#tab-settings [data-act=passkey]');
+  await B.click('[data-act=lockHere]');
+  await B.reload();
+  await B.waitForSelector('#pkUnlock', { timeout: 20000 });
+  if (SHOTS) await B.screenshot({ path: `${SHOTS}/26-faceid-unlock.png` });
+  await B.click('#pkUnlock');
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
+  ok(true, 'locked album opens with Face ID (passkey), no passphrase typed');
+  // a device without that passkey can't
+  await cdpB.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
+  ({ authenticatorId } = await cdpB.send('WebAuthn.addVirtualAuthenticator', { options: authOpts }));
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=lockHere]');
+  await B.click('#pkUnlock');
+  await B.waitForSelector('#unlockErr:not([hidden])', { timeout: 20000 });
+  ok(!(await B.isVisible('#content .tile')), `another device's passkey doesn't open it (${await B.textContent('#unlockErr')})`);
+  await B.fill('#unlockPass', PASS4);
+  await B.click('#unlockBtn');
+  await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
+  await B.click('[data-tab=settings]');
+  await B.click('[data-act=passkey]');
+  await B.click('[data-pk-del]');
+  await until(() => !JSON.parse(RE.fileText('album.json')).passkeys, 150000);
+  ok(true, 'a passkey slot can be removed from the album');
+  await B.click('#scrim', { position: { x: 10, y: 10 } });
+  await cdpB.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
+
   // ---------- invite link / QR: dave joins without anyone typing his username ----------
   await A.click('[data-tab=settings]');
   await A.click('[data-act=invite]');

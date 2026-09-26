@@ -8,7 +8,7 @@
 
 import * as C from './core.js';
 import { Repo, Account, clearMediaCache, textToBase64, ENCRYPTED_DESCRIPTION } from './github.js';
-import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecoveryCode, withRecovery, hasRecovery, unlockWithRecovery, keyToText, keyFromText, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys } from './crypto.js';
+import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecoveryCode, withRecovery, hasRecovery, unlockWithRecovery, keyToText, keyFromText, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys, passkeyAvailable, addPasskey, removePasskey, passkeySlots, unlockWithPasskey, NoPasskey } from './crypto.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
@@ -31,12 +31,13 @@ const ICON = {
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7zM19 15c.25 2 1 2.75 3 3-2 .25-2.75 1-3 3-.25-2-1-2.75-3-3 2-.25 2.75-1 3-3z"/></svg>',
+  faceid: '<svg class="faceid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 16a4 4 0 0 0 5 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
 };
 
 // ---------------- persistence ----------------
 
-const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite' };
+const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite', passkey: id => 'moa.passkey.' + id };
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
@@ -1275,7 +1276,8 @@ function renderSettings() {
       ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
       ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
       ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>
-      <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.title')}</b><small>${t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet')}</small></span><span class="val">›</span></button>` : ''}
+      <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.title')}</b><small>${t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet')}</small></span><span class="val">›</span></button>
+      <button class="row row-btn" data-act="passkey"><span class="grow"><b>${esc(t('pk.title', { name: bioName() }))}</b><small>${passkeyStatus()}</small></span><span class="val">›</span></button>` : ''}
       <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && !S.gh.sealed ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(load(LS.convert(S.space.id), null)?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && S.gh.sealed ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(load(LS.convert(S.space.id), null)?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}
@@ -2080,6 +2082,71 @@ function decryptAlbumSheet() {
   $('#cvGo', sh).onclick = () => convertAlbum(false, { purge: $('#cvPurge', sh).checked });
 }
 
+// ---------------- Face ID / Touch ID: a passkey that opens an encrypted album ----------------
+
+const IS_IOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+function bioName() {
+  const ua = navigator.userAgent;
+  if (IS_IOS()) return 'Face ID';
+  if (/Macintosh/.test(ua)) return 'Touch ID';
+  if (/Windows/.test(ua)) return 'Windows Hello';
+  if (/Android/.test(ua)) return t('pk.android');
+  return t('pk.generic');
+}
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (IS_IOS()) return 'iPad';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'Windows';
+  return t('pk.device');
+}
+const myPasskey = () => { const id = load(LS.passkey(S.space.id), null); return passkeySlots(S.gh.header).find(x => x.id === id) || null; };
+function passkeyStatus() {
+  const n = passkeySlots(S.gh.header).length;
+  return myPasskey() ? t('pk.onHere', { n }) : n ? t('pk.others', { n }) : t('pk.off');
+}
+
+async function passkeySheet() {
+  const slots = passkeySlots(S.gh.header), mine = myPasskey(), name = bioName();
+  const ok = await passkeyAvailable();
+  const sh = openSheet(`<h2>${esc(t('pk.title', { name }))}</h2>
+    <p class="sheet-p">${esc(t('pk.body', { name }))}</p>
+    ${slots.length ? `<div class="panel pk-list">${slots.map(x => `<div class="row"><span class="grow"><b>${esc(x.label || t('pk.device'))}${x.id === mine?.id ? ` · ${t('pk.thisDevice')}` : ''}</b><small>@${esc(x.by || '')} · ${fmtDate(x.at)}</small></span>${S.canWrite ? `<button class="text-btn danger" data-pk-del="${esc(x.id)}">${t('common.delete')}</button>` : ''}</div>`).join('')}</div>` : ''}
+    ${!ok ? `<p class="err">${esc(t('pk.unsupported', { name }))}</p>` : ''}
+    <p class="err" id="pkErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.close')}</button>${ok && !mine && S.canWrite ? `<button class="btn btn-primary" id="pkAdd">${esc(t('pk.turnOn'))}</button>` : ''}</div>`);
+  const fail = msg => { const e = $('#pkErr', sh); e.textContent = msg; e.hidden = false; };
+  $('#pkAdd', sh)?.addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const { header, id } = await addPasskey(S.gh.header, S.gh.key, { title: S.index?.title || S.space.repo, user: S.me?.login || 'moa', label: deviceLabel(), by: S.me?.login || '' });
+      await saveHeader(header, `Moa: add ${name} unlock`);
+      save(LS.passkey(S.space.id), id);
+      toast(t('pk.added', { name }));
+      closeSheet();
+      rerender();
+    } catch (ex) {
+      btn.disabled = false;
+      if (ex instanceof NoPasskey && ex.message === 'cancelled') return;
+      fail(ex instanceof NoPasskey ? t('pk.unsupported', { name }) : errMsg(ex));
+    }
+  });
+  sh.addEventListener('click', async e => {
+    const b = e.target.closest('[data-pk-del]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      await saveHeader(removePasskey(S.gh.header, b.dataset.pkDel), `Moa: remove ${name} unlock`);
+      toast(t('pk.removed'));
+      passkeySheet();
+      rerender();
+    } catch (ex) { b.disabled = false; fail(errMsg(ex)); }
+  });
+}
+
 function lockHere() {
   const sp = S.space;
   S.keys.delete(sp.id);
@@ -2101,6 +2168,7 @@ function renderLocked(header) {
   const c = $('#content');
   c.innerHTML = `<div class="empty locked-album"><div class="lock-hero">${ICON.lock}</div>
     <h2>${t('lock.title')}</h2>
+    <div id="pkUnlockBox" style="max-width:340px;margin:0 auto 14px" hidden><button class="btn btn-primary btn-block" type="button" id="pkUnlock">${ICON.faceid}${esc(t('pk.unlock', { name: bioName() }))}</button><p class="or-line">${t('pk.or')}</p></div>
     <form id="unlockForm" autocomplete="off" style="max-width:340px;margin:0 auto;text-align:left">
       <label class="field" id="unlockPassBox"><span>${t('lock.pass')}</span><input id="unlockPass" type="password" autocomplete="current-password"></label>
       <label class="field" id="unlockCodeBox" hidden><span>${t('rec.title')}</span><input id="unlockCode" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
@@ -2111,7 +2179,41 @@ function renderLocked(header) {
     </form></div>`;
   const sp = S.space;
   let viaCode = false;
-  setTimeout(() => $('#unlockPass')?.focus(), 50);
+  const opened = async (key, { remember, recovered = false }) => {
+    if (S.space !== sp) return;
+    S.gh.key = key;
+    S.keys.set(sp.id, key);
+    if (remember) rememberKey(sp.id, key);
+    await serial(() => refresh(true));
+    if (S.space !== sp) return;
+    setSync(S.pending.length ? 'pending' : null);
+    if (S.pending.length) scheduleFlush(500);
+    // opened with the recovery code: the passphrase is lost, so set a new one now
+    if (recovered && S.canWrite) passphraseSheet({ forgot: true, title: t('rec.setNew') });
+    else resumeUploads();
+  };
+  // Face ID first when this album has passkeys; the passphrase form stays underneath
+  if (passkeySlots(header).length) passkeyAvailable().then(ok => {
+    if (!ok || S.space !== sp || !$('#pkUnlockBox')) return;
+    $('#pkUnlockBox').hidden = false;
+    $('#pkUnlock').onclick = async () => {
+      const btn = $('#pkUnlock'), err = $('#unlockErr');
+      err.hidden = true;
+      btn.disabled = true;
+      try {
+        const { key, id } = await unlockWithPasskey(header);
+        save(LS.passkey(sp.id), id); // this device (or its synced keychain) holds that passkey
+        await opened(key, { remember: false });
+      } catch (ex) {
+        if (!$('#pkUnlock')) return;
+        btn.disabled = false;
+        // browsers answer "cancelled" and "no such passkey here" the same way, on purpose
+        err.textContent = ex instanceof NoPasskey ? t(ex.message === 'cancelled' ? 'pk.notOpened' : 'pk.notHere', { name: bioName() }) : errMsg(ex);
+        err.hidden = false;
+      }
+    };
+  });
+  setTimeout(() => { if ($('#pkUnlockBox')?.hidden !== false) $('#unlockPass')?.focus(); }, 50);
   $('#unlockForgot').onclick = () => {
     const err = $('#unlockErr');
     if (!hasRecovery(header)) { err.textContent = t('rec.missing'); err.hidden = false; return; }
@@ -2129,17 +2231,7 @@ function renderLocked(header) {
     btn.disabled = true; btn.textContent = t('lock.unlocking');
     try {
       const key = viaCode ? await unlockWithRecovery(header, $('#unlockCode').value) : await unlockAlbumKey(header, $('#unlockPass').value);
-      if (S.space !== sp) return;
-      S.gh.key = key;
-      S.keys.set(sp.id, key);
-      if ($('#unlockRemember').checked) rememberKey(sp.id, key);
-      await serial(() => refresh(true));
-      if (S.space !== sp) return;
-      setSync(S.pending.length ? 'pending' : null);
-      if (S.pending.length) scheduleFlush(500);
-      // opened with the recovery code: the passphrase is lost, so set a new one now
-      if (viaCode && S.canWrite) passphraseSheet({ forgot: true, title: t('rec.setNew') });
-      else resumeUploads();
+      await opened(key, { remember: $('#unlockRemember').checked, recovered: viaCode });
     } catch (ex) {
       if (!$('#unlockBtn')) return;
       btn.disabled = false; btn.textContent = t('lock.unlock');
@@ -3239,6 +3331,7 @@ function bind() {
       case 'encryptAlbum': return encryptAlbumSheet();
       case 'decryptAlbum': return decryptAlbumSheet();
       case 'lockHere': return lockHere();
+      case 'passkey': return passkeySheet();
       case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
       case 'home': return showHome();

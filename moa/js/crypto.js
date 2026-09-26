@@ -113,6 +113,104 @@ export async function unlockWithRecovery(header, code) {
   return albumKey(await unwrap(header.recovery, normalizeRecoveryCode(code)));
 }
 
+// ---------- Face ID / Touch ID / fingerprint: a passkey slot (WebAuthn PRF) ----------
+// A passkey made for this album gives back the same 32 secret bytes every time the person
+// passes Face ID (the PRF extension), and those bytes wrap the album key like a passphrase
+// would. The slots live in album.json next to the passphrase slot: iCloud Keychain / Google
+// Password Manager sync the passkey, so the person's other devices open the album too.
+// Only the person holding the passkey can use their slot; the passphrase and recovery code
+// keep working.
+
+export class NoPasskey extends Error {}
+
+const b64url = u8 => b64(u8).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64url = s => unb64(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
+
+/** Face ID / Touch ID / Windows Hello / fingerprint on this device, and a browser that speaks WebAuthn. */
+export async function passkeyAvailable() {
+  try {
+    return !!globalThis.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch { return false; }
+}
+
+async function prfKey(secret) {
+  const base = await subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode('moa album key v1') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+const prfFirst = cred => {
+  const r = cred?.getClientExtensionResults?.().prf?.results?.first;
+  return r ? new Uint8Array(r) : null;
+};
+
+/** Ask for Face ID and the PRF secret of one of `ids` (credential ids as base64url). → { id, secret } */
+async function prfGet(ids, salt) {
+  let cred;
+  try {
+    cred = await navigator.credentials.get({ publicKey: {
+      challenge: rand(32),
+      allowCredentials: ids.map(id => ({ type: 'public-key', id: unb64url(id) })),
+      userVerification: 'required',
+      timeout: 120000,
+      extensions: { prf: { eval: { first: unb64url(salt) } } },
+    } });
+  } catch (e) { throw new NoPasskey(e?.name === 'NotAllowedError' ? 'cancelled' : e?.message || 'failed'); }
+  const secret = prfFirst(cred);
+  if (!secret) throw new NoPasskey('prf unsupported');
+  return { id: b64url(new Uint8Array(cred.rawId)), secret };
+}
+
+/**
+ * Make a passkey for this album on this device and a slot for the header.
+ * header.passkeys = { salt, slots: [{ id, label, by, at, wrapped }] } — one salt per album,
+ * so one Face ID prompt can try every slot this device might hold.
+ */
+export async function addPasskey(header, key, { title = 'Moa', user = 'moa', label = '', by = '' } = {}) {
+  const salt = header.passkeys?.salt || b64url(rand(32));
+  let cred;
+  try {
+    cred = await navigator.credentials.create({ publicKey: {
+      rp: { name: 'Moa' },
+      user: { id: rand(16), name: user, displayName: `${title} · Moa` },
+      challenge: rand(32),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+      timeout: 120000,
+      extensions: { prf: { eval: { first: unb64url(salt) } } },
+    } });
+  } catch (e) { throw new NoPasskey(e?.name === 'NotAllowedError' ? 'cancelled' : e?.message || 'failed'); }
+  const id = b64url(new Uint8Array(cred.rawId));
+  if (cred.getClientExtensionResults?.().prf?.enabled === false) throw new NoPasskey('prf unsupported');
+  // some browsers only hand out the secret on sign-in, not at creation: ask once more
+  const secret = prfFirst(cred) || (await prfGet([id], salt)).secret;
+  const iv = rand(12);
+  const data = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, await prfKey(secret), await rawOf(key)));
+  const slot = { id, label, by, at: new Date().toISOString(), wrapped: { iv: b64(iv), data: b64(data) } };
+  const slots = (header.passkeys?.slots || []).filter(x => x.id !== id);
+  return { header: { ...header, passkeys: { salt, slots: [...slots, slot] } }, id };
+}
+
+export const passkeySlots = header => header?.passkeys?.slots || [];
+
+export function removePasskey(header, id) {
+  const slots = passkeySlots(header).filter(x => x.id !== id);
+  const { passkeys, ...rest } = header;
+  return slots.length ? { ...rest, passkeys: { ...passkeys, slots } } : rest;
+}
+
+/** Face ID → album key. Throws NoPasskey (cancelled, not on this device) or BadPassphrase (slot doesn't open). */
+export async function unlockWithPasskey(header) {
+  const slots = passkeySlots(header);
+  if (!slots.length) throw new NoPasskey('none');
+  const { id, secret } = await prfGet(slots.map(x => x.id), header.passkeys.salt);
+  const slot = slots.find(x => x.id === id);
+  if (!slot) throw new NoPasskey('unknown passkey');
+  try {
+    const raw = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(slot.wrapped.iv) }, await prfKey(secret), unb64(slot.wrapped.data)));
+    return { key: await albumKey(raw), id };
+  } catch { throw new BadPassphrase('passkey slot does not open'); }
+}
+
 // ---------- the key as text, for an invite link's #fragment ----------
 
 export async function keyToText(key) {

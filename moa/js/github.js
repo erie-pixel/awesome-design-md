@@ -269,6 +269,31 @@ export class Repo {
     await this.req('PUT', `/contents/${encPath(path)}`, { body: { message, content: textToBase64(text) } });
   }
 
+  /**
+   * A new tree on top of `base`. GitHub refuses the whole tree ("Invalid tree info") when one
+   * entry deletes a path that isn't there — a file already gone (another device, another tool,
+   * an old half-finished change) — or names a path twice. Such a delete has nothing left to do,
+   * so it is dropped and the rest of the change still saves, instead of failing forever.
+   */
+  async postTree(base, entries) {
+    const byPath = new Map();
+    for (const e of entries) if (!byPath.has(e.path) || e.sha !== null) byPath.set(e.path, e); // a write beats a delete of the same path
+    let list = [...byPath.values()];
+    try {
+      return (await this.req('POST', '/git/trees', { body: { base_tree: base, tree: list } })).sha;
+    } catch (e) {
+      if (e.status !== 422 || !list.some(x => x.sha === null)) throw e;
+      const t = await this.req('GET', `/git/trees/${base}?recursive=1`);
+      if (t.truncated) throw e;
+      const have = new Set(t.tree.filter(x => x.type === 'blob').map(x => x.path));
+      const gone = list.filter(x => x.sha === null && !have.has(x.path));
+      if (!gone.length) throw e;
+      console.warn('Moa: already gone, not deleting', gone.map(x => x.path));
+      list = list.filter(x => !gone.includes(x));
+      return (await this.req('POST', '/git/trees', { body: { base_tree: base, tree: list } })).sha;
+    }
+  }
+
   /** Small text files in one commit (the recovery vault). text null = delete (path must exist). */
   async writeFiles(files, message) {
     if (!this.branch) await this.info();
@@ -281,7 +306,7 @@ export class Repo {
       const tree = await this.treeOf(head);
       const entries = [];
       for (const [path, text] of Object.entries(files)) entries.push({ path, mode: '100644', type: 'blob', sha: text == null ? null : await this.blob(textToBase64(text)) });
-      const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
+      const newTree = await this.postTree(tree, entries);
       const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
       await this.gate();
       try { await this.req('PATCH', `/git/refs/heads/${encodeURIComponent(this.branch)}`, { body: { sha: c.sha, force: false } }); return; } catch (e) {
@@ -334,7 +359,7 @@ export class Repo {
         ...changed.map(([path], i) => ({ path, mode: '100644', type: 'blob', sha: shas[i] })),
         ...[...new Set([...deletes, ...removed])].map(path => ({ path, mode: '100644', type: 'blob', sha: null })),
       ];
-      const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
+      const newTree = await this.postTree(tree, entries);
       const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
       await this.gate();
       try {
@@ -390,7 +415,7 @@ export class Repo {
       const written = new Set(entries.map(e => e.path));
       const gone = [...new Set([...oldPaths.filter(p => map[p]), ...st.files.keys()])].filter(p => !written.has(p));
       entries.push(...gone.map(path => ({ path, mode: '100644', type: 'blob', sha: null })));
-      const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
+      const newTree = await this.postTree(tree, entries);
       const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
       await this.gate();
       try {

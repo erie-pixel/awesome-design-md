@@ -1,20 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- Moa: three photos, fanned out and glowing -->
+  <!-- Moa: three photos, fanned out -->
   <defs>
     <clipPath id="tile"><rect width="1024" height="1024" rx="230"/></clipPath>
-    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%" color-interpolation-filters="sRGB">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="46" result="wide"/>
-      <feComponentTransfer in="wide" result="wideSoft"><feFuncA type="linear" slope="0.85"/></feComponentTransfer>
-      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="tight"/>
-      <feMerge><feMergeNode in="wideSoft"/><feMergeNode in="tight"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
   <g clip-path="url(#tile)">
     <rect width="1024" height="1024" fill="#000"/>
     <g transform="translate(512 520) scale(0.84) translate(-762 -528)">
-    <g filter="url(#glow)"><rect x="-262" y="-262" width="524" height="524" rx="62" fill="#5ac8fa" transform="translate(932 454) rotate(21)"/></g>
-    <g filter="url(#glow)"><rect x="-255" y="-255" width="510" height="510" rx="60" fill="#ff4264" transform="translate(772 532) rotate(17)"/></g>
-    <g filter="url(#glow)"><rect x="-270" y="-270" width="540" height="540" rx="64" fill="#ffa62f" transform="translate(592 628) rotate(-12)"/></g>
+    <g><rect x="-262" y="-262" width="524" height="524" rx="62" fill="#5ac8fa" transform="translate(932 454) rotate(21)"/></g>
+    <g><rect x="-255" y="-255" width="510" height="510" rx="60" fill="#ff4264" transform="translate(772 532) rotate(17)"/></g>
+    <g><rect x="-270" y="-270" width="540" height="540" rx="64" fill="#ffa62f" transform="translate(592 628) rotate(-12)"/></g>
     </g>
   </g>
 </svg>

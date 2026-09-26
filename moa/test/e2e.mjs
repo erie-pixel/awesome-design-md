@@ -100,6 +100,8 @@ const readIndex = (m = RA) => {
 };
 
 /** Poll a Node-side condition (repository state) until it holds. */
+/** Settings, at the top or inside one of its groups (security · app · limits · albums). */
+const settings = async (P, page) => { await P.click('[data-tab=settings]'); if (page) await P.click(`[data-setpage=${page}]`); };
 const until = async (fn, ms = 30000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error('timed out: ' + fn); await new Promise(r => setTimeout(r, 100)); } };
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) failures++; };
@@ -203,6 +205,12 @@ try {
   await A.fill('#nrName', 'moa-spring-trip');
   await A.click('#nrOk');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'));
+  await A.waitForSelector('#suGo');
+  ok(await A.locator('#suAi').count() === 1 && await A.locator('#suPk').count() === 0, 'a new album asks about smart tags (no Face ID question for a plain album)');
+  await A.click('#suAi + span');
+  ok(await A.isVisible('#suAiInfo'), 'turning smart tags on right there shows what you agree to');
+  await A.click('#suAi + span');
+  await A.click('#sheet [data-close]');
   if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/02a-empty-library.png` }); }
   ok(await A.isVisible('#content .empty-art'), 'empty library shows the tiles picture');
   RA = api.at('alice/moa-spring-trip');
@@ -399,10 +407,11 @@ try {
   await A.click('[data-i=delete]');
   await A.waitForSelector('#delOk');
   ok(!(await A.isChecked('#delPurge')), 'delete sheet offers "Also erase from history", off by default');
+  RA.dropFile(victim.files.preview); // already gone from the repository: GitHub would refuse the whole tree ("Invalid tree info")
   await A.click('#delOk');
   await A.evaluate(() => window.__moa.flush());
   await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 20000 });
-  ok(!readIndex().photos[p1] && !RA.paths().includes(victim.files.thumb) && !RA.paths().includes(victim.files.original), 'delete removes entry and its files');
+  ok(!readIndex().photos[p1] && !RA.paths().includes(victim.files.thumb) && !RA.paths().includes(victim.files.original), 'delete removes entry and its files, even when one of them was already gone');
   ok(RA.reachable(victimSha), 'a plain delete still leaves the photo in git history');
 
   // duplicate upload is skipped
@@ -420,7 +429,14 @@ try {
   await A.waitForSelector('#tab-settings .panel');
   const settingsText = await A.textContent('#tab-settings');
   ok(settingsText.includes('@alice') && settingsText.includes('@bob') && settingsText.includes('Storage'), 'settings lists members and storage');
-  ok(settingsText.includes('left') && settingsText.includes('10 GB') && await A.locator('#tab-settings .dot').count() >= 5, 'storage ring + GitHub limit rows rendered');
+  ok(settingsText.includes('left') && settingsText.includes('10 GB') && (await A.$$eval('#tab-settings .section-title', h => h.map(x => x.textContent)))[0] === 'Storage', 'storage comes first in Settings');
+  ok(!(await A.isVisible('[data-act=purge]')) && !(await A.isVisible('#tab-settings .dot')) && await A.locator('[data-setpage]').count() === 4, 'security, app settings, GitHub limits and albums sit behind grouped rows');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/09-settings.png`, fullPage: true });
+  await settings(A, 'limits');
+  ok(await A.locator('#tab-settings .dot').count() >= 5, 'GitHub limits page lists each limit');
+  await A.click('[data-act=setBack]');
+  await A.waitForSelector('[data-setpage=security]');
+  await A.click('[data-setpage=security]');
 
   // erase history: one root commit with today's files; the deleted photo is gone from every commit
   const pathsBefore = RA.paths();
@@ -436,14 +452,19 @@ try {
   ok(readIndex().photos[p0].tags.includes('지운뒤') && RA.history().length === 2, 'a friend on the old history saves on top of the erased one');
   const bobStill = await B.evaluate(async p => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/moa-spring-trip/${p}`)), victim.files.thumb);
   ok(!bobStill, `friend's device drops its cached copy of the deleted photo (had it: ${bobHadIt})`);
-  // language: English by default, Korean from Settings, remembered
+  // language: English by default, Korean from Settings → App settings, remembered
   ok((await A.textContent('[data-tab=photos]')).trim() === 'Library', 'English UI by default');
+  await settings(A, 'app');
+  ok((await A.textContent('#tab-settings')).includes('2048px JPEG') && (await A.textContent('#tab-settings')).includes('Photos on GitHub are not touched'), 'Keep originals and Clear photo cache explain what they do');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/09c-settings-app.png`, fullPage: true });
   await A.selectOption('[data-lang]', 'ko');
-  ok((await A.textContent('[data-tab=photos]')).trim() === '보관함' && (await A.textContent('#tab-settings h1')) === '설정' && (await A.getAttribute('html', 'lang')) === 'ko', 'switching to 한국어 re-labels the app');
+  ok((await A.textContent('[data-tab=photos]')).trim() === '보관함' && (await A.textContent('#tab-settings h1')) === '앱 설정' && (await A.getAttribute('html', 'lang')) === 'ko', 'switching to 한국어 re-labels the app');
+  await settings(A);
   if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/09b-settings-ko.png` }); }
+  await settings(A, 'app');
   await A.selectOption('[data-lang]', 'en');
-  ok((await A.evaluate(() => JSON.parse(localStorage.getItem('moa.prefs')).lang)) === 'en' && (await A.textContent('#tab-settings h1')) === 'Settings', 'language choice is saved');
-  if (SHOTS) await A.screenshot({ path: `${SHOTS}/09-settings.png`, fullPage: true });
+  ok((await A.evaluate(() => JSON.parse(localStorage.getItem('moa.prefs')).lang)) === 'en' && (await A.textContent('#tab-settings h1')) === 'App settings', 'language choice is saved');
+  await settings(A);
   await A.click('[data-act=invite]');
   const link = await A.inputValue('#inviteLink');
   ok(link.includes('#join=alice%2Fmoa-spring-trip') && link.includes('by=alice'), 'invite link generated');
@@ -458,18 +479,22 @@ try {
 
   // ---------- an encrypted album ----------
   const PASS = 'our secret trip 2024', PASS2 = 'a brand new passphrase';
-  await A.click('[data-tab=settings]');
+  await settings(A, 'albums');
   await A.click('[data-act=home]');
+  // Face ID on alice's phone (a virtual authenticator), offered while the album is being made
+  const cdpA = await ctxA.newCDPSession(A);
+  await cdpA.send('WebAuthn.enable');
+  await cdpA.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true } });
   await A.click('#newRepoBtn');
   await A.waitForFunction(() => document.activeElement?.id === 'nrTitle'); // the sheet focuses the title itself
   await A.fill('#nrTitle', '비밀 여행');
   await A.click('#encOn + span');
   const encName = await A.inputValue('#nrName');
   ok(/^moa-[a-z0-9]{6}$/.test(encName), `encrypted album gets a repository name that doesn't reveal its title (${encName})`);
-  await A.fill('#encPass', 'short');
-  await A.fill('#encPass2', 'short');
+  await A.fill('#encPass', 'abc');
+  await A.fill('#encPass2', 'abc');
   await A.click('#nrOk');
-  ok((await A.textContent('#nrErr')).includes('8 characters'), 'too-short passphrase refused');
+  ok((await A.textContent('#nrErr')).includes('4 characters'), 'passphrases shorter than 4 characters refused');
   await A.fill('#encPass', PASS);
   await A.fill('#encPass2', PASS);
   if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13-new-encrypted.png` }); }
@@ -485,7 +510,13 @@ try {
   const REC = (await A.textContent('#rcCode')).trim();
   ok(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){5}$/.test(REC) && VAULT.fileText(vaultFile).includes(`Code: ${REC}`), `the vault file holds the same code, which can also be shown (${REC.slice(0, 4)}-…)`);
   await A.click('#sheet [data-close].btn-primary');
+  await A.waitForSelector('#suGo');
+  ok(await A.isChecked('#suPk') && !(await A.isChecked('#suAi')), 'then the album asks: Face ID (on) and smart tags (off until chosen)');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13c-setup.png` }); }
+  await A.click('#suGo');
   const RE = api.at(`alice/${encName}`);
+  await until(() => JSON.parse(RE.fileText('album.json')).passkeys?.slots?.[0]?.by === 'alice', 150000);
+  ok(!(await A.evaluate(() => JSON.parse(localStorage.getItem('moa.prefs')).ai)), 'Face ID set up in the same step; smart tags stayed off');
   ok(!RE.fileText('album.json').includes(REC) && JSON.parse(RE.fileText('album.json')).recovery.vault?.owner === 'alice', 'the album repository never holds the code, only where alice keeps it');
   ok(!!JSON.parse(RE.fileText('album.json')).recovery, 'album.json also holds the key wrapped by the recovery code');
   const header = JSON.parse(RE.fileText('album.json'));
@@ -512,15 +543,15 @@ try {
   ok(true, 'viewer decrypts and shows the photo');
   await A.click('[data-v=close]');
   ok(!(await A.evaluate(async repo => !!(await (await caches.open('moa-media-v1')).match(`https://moa.cache/alice/${repo}/.moa/index-cache.json`)), encName)), 'no plaintext offline index kept for an encrypted album');
-  await A.click('[data-tab=settings]');
-  ok((await A.textContent('#tab-settings')).includes('Encrypted'), 'settings show the album is encrypted');
+  await settings(A);
+  ok((await A.textContent('#tab-settings [data-setpage=security]')).includes('Encrypted'), 'settings show the album is encrypted');
   await A.click('[data-act=invite]');
   await A.fill('#invUser', 'bob');
   await A.click('#invSend');
   await A.waitForSelector('#invList :text("Pending")');
   await A.click('#scrim', { position: { x: 10, y: 10 } });
 
-  await B.click('[data-tab=settings]');
+  await settings(B, 'albums');
   await B.click('[data-act=home]');
   await B.waitForSelector('[data-accept]');
   await B.click('[data-accept]');
@@ -555,7 +586,7 @@ try {
   await A.waitForSelector('#viewer', { state: 'hidden' });
 
   // new passphrase: same key, old passphrase no longer opens album.json
-  await A.click('[data-tab=settings]');
+  await settings(A, 'security');
   await A.click('[data-act=passphrase]');
   await A.fill('#ppOld', 'wrong old one');
   await A.fill('#encPass', PASS2);
@@ -576,7 +607,7 @@ try {
   await B.evaluate(() => window.__moa.refresh());
   await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
   ok(true, 'the friend\'s remembered key keeps working after the passphrase change');
-  await B.click('[data-tab=settings]');
+  await settings(B, 'security');
   await B.click('[data-act=lockHere]');
   await B.waitForSelector('#unlockForm');
   await B.reload();
@@ -593,12 +624,12 @@ try {
   await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
   await B.waitForTimeout(500);
   ok(!(await B.isVisible('#ppOk')), 'a member opens with the recovery code but isn\'t asked to change the passphrase');
-  await B.click('[data-tab=settings]');
+  await settings(B, 'security');
   ok(!(await B.isVisible('#tab-settings [data-act=passphrase]')) && !(await B.isVisible('#tab-settings [data-act=recovery]')), 'only the owner sees "Change passphrase" and "Passphrase recovery"');
   await B.click('[data-tab=photos]');
 
   // the owner forgot the passphrase: GitHub recovery reads the code from moa-vault, then a new passphrase
-  await A.click('[data-tab=settings]');
+  await settings(A, 'security');
   await A.click('[data-act=lockHere]');
   await A.waitForSelector('#unlockForm');
   await A.click('#unlockForgot');
@@ -619,7 +650,7 @@ try {
 
   // turn encryption off, then on again, on the same album
   const sealedSha = RE.shaOf(RE.paths().find(p => p.startsWith('data/')));
-  await A.click('[data-tab=settings]');
+  await settings(A, 'security');
   await A.click('[data-act=decryptAlbum]');
   await A.click('#cvGo');
   await until(() => { try { return JSON.parse(RE.fileText('album.json')).app === 'moa' && RE.history().length === 1; } catch { return false; } }, 150000);
@@ -654,7 +685,7 @@ try {
   await cdpB.send('WebAuthn.enable');
   const authOpts = { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true };
   let { authenticatorId } = await cdpB.send('WebAuthn.addVirtualAuthenticator', { options: authOpts });
-  await B.click('[data-tab=settings]');
+  await settings(B, 'security');
   await B.click('[data-act=passkey]');
   await B.click('#pkAdd');
   await until(() => { try { return JSON.parse(RE.fileText('album.json')).passkeys?.slots?.length === 1; } catch { return false; } }, 150000);
@@ -662,8 +693,12 @@ try {
   ok(hPk.passkeys.slots[0].by === 'bob' && !!(await K.unlockAlbumKey(hPk, PASS4)), 'a passkey slot is added to the album; the passphrase still opens it');
   await B.waitForSelector('#tab-settings [data-act=passkey]');
   await B.click('[data-act=lockHere]');
+  await B.waitForSelector('#unlockForm');
   await B.reload();
-  await B.waitForSelector('#pkUnlock', { timeout: 20000 });
+  await B.waitForSelector('#pkUnlock', { timeout: 20000 }).catch(async e => {
+    console.log('PK DEBUG', JSON.stringify(await B.evaluate(async () => ({ locked: !!document.querySelector('#unlockForm'), box: document.querySelector('#pkUnlockBox')?.outerHTML?.slice(0, 80), slots: window.__moa.S.gh?.header?.passkeys?.slots?.length, avail: await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(), content: document.querySelector('#content')?.textContent.slice(0, 120) }))));
+    throw e;
+  });
   if (SHOTS) await B.screenshot({ path: `${SHOTS}/26-faceid-unlock.png` });
   await B.click('#pkUnlock');
   await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
@@ -671,7 +706,7 @@ try {
   // a device without that passkey can't
   await cdpB.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
   ({ authenticatorId } = await cdpB.send('WebAuthn.addVirtualAuthenticator', { options: authOpts }));
-  await B.click('[data-tab=settings]');
+  await settings(B, 'security');
   await B.click('[data-act=lockHere]');
   await B.click('#pkUnlock');
   await B.waitForSelector('#unlockErr:not([hidden])', { timeout: 20000 });
@@ -679,7 +714,7 @@ try {
   await B.fill('#unlockPass', PASS4);
   await B.click('#unlockBtn');
   await B.waitForFunction(() => document.querySelectorAll('#content .tile img.ok').length === 1, null, { timeout: 20000 });
-  await B.click('[data-tab=settings]');
+  await settings(B, 'security');
   await B.click('[data-act=passkey]');
   await B.click('[data-pk-del]');
   await until(() => !JSON.parse(RE.fileText('album.json')).passkeys, 150000);
@@ -719,7 +754,7 @@ try {
   await B.click('[data-join=cancel]');
 
   // 7-day link, joined by typing the code
-  await A.click('[data-tab=settings]');
+  await settings(A, 'albums');
   await A.click(`[data-space="alice/moa-spring-trip"]`);
   await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 4, null, { timeout: 20000 });
   await A.click('[data-tab=settings]');
@@ -788,7 +823,7 @@ try {
     const f = path.join(ROOT, 'test/fake-clip', r.request().url().split('/resolve/main/')[1]);
     return r.fulfill(fs.existsSync(f) ? { status: 200, body: fs.readFileSync(f), headers: { 'Access-Control-Allow-Origin': '*' } } : { status: 404, body: '', headers: { 'Access-Control-Allow-Origin': '*' } });
   });
-  await A.click('[data-tab=settings]');
+  await settings(A, 'app');
   await A.click('[data-ai-toggle] + span');
   await A.waitForSelector('#aiAgree');
   ok(!(await A.isChecked('[data-ai-toggle]')), 'smart tags stay off until the consent sheet is accepted');
@@ -823,7 +858,7 @@ try {
   await A.fill('#searchInput', '파란 바다');
   ok(await seaOnly(), `Korean search words work too (${await tileNames()})`);
   await A.click('#searchBtn');
-  await A.click('[data-tab=settings]');
+  await settings(A, 'app');
   await A.click('[data-ai-toggle] + span');
   await A.click('#aiClear + span');
   await A.click('#aiOff');
@@ -931,7 +966,7 @@ try {
   await A.click('[data-v=close]');
 
   // home screen shows the main photo
-  await A.click('[data-tab=settings]');
+  await settings(A, 'albums');
   await A.click('[data-act=home]');
   ok(await A.waitForSelector('[data-repo="alice/moa-spring-trip"] .album-dot.has-cover img', { timeout: 10000 }).then(() => true, () => false), 'home screen shows each album\'s main photo');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/25-home-cover.png` });
@@ -942,7 +977,7 @@ try {
 
   // sign-out revokes the grant and forgets the token
   B.once('dialog', d => d.accept());
-  await B.click('[data-act=home]').catch(() => {});
+  await B.evaluate(() => window.__moa.showHome());
   await B.click('[data-repo]');
   await B.waitForSelector('#content .tile', { timeout: 20000 });
   await B.click('[data-tab=settings]');

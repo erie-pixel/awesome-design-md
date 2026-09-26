@@ -606,6 +606,32 @@ button.map-note:disabled { color: var(--muted); font-weight: 400; }
 .vault-opt .grow small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.35; margin-top: 2px; }
 .vault-opt .grow b { display: block; }
 
+/* a disclosure that reads as tappable: label + chevron, full-width target */
+details.more { margin: -2px 0 12px; }
+details.more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 14px; border-radius: 12px; background: var(--chip); color: var(--ink-2); font-size: 14px; font-weight: 500; transition: background-color 150ms ease, transform 160ms var(--ease-out); }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: ""; width: 8px; height: 8px; border: solid var(--muted); border-width: 0 2px 2px 0; transform: translateY(-2px) rotate(45deg); transition: transform 200ms var(--ease-out); flex: none; }
+details.more[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+details.more > summary:active { transform: scale(0.98); }
+details.more[open] > summary { margin-bottom: 12px; }
+
+/* ---------------- settings groups ---------------- */
+.group-row .group-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #fff; flex: none; margin-right: 12px; }
+.group-row .group-ic svg { width: 17px; height: 17px; }
+.group-ic.security { background: #30a46c; }
+.group-ic.app { background: #8e8e93; }
+.group-ic.limits { background: #ff9f0a; }
+.group-ic.albums { background: var(--primary); }
+.sub-hero .back { margin-bottom: 4px; }
+.set-note { font-size: 13px; color: var(--muted); margin: 10px 20px 0; line-height: 1.45; }
+#tab-settings .row .grow small { line-height: 1.4; }
+
+.setup-opt .grow b { display: flex; align-items: center; gap: 6px; }
+.setup-opt .grow b svg { width: 18px; height: 18px; margin: 0; flex: none; }
+.setup-opt .grow small { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; margin-top: 3px; font-weight: 400; }
+#suAiInfo { margin: -6px 4px 12px; }
+#suAiInfo .consent-h { list-style: none; margin-left: -18px; font-weight: 600; color: var(--ink-2); }
+
 @media (prefers-reduced-motion: reduce) {
   /* keep fades that explain state; drop movement */
   .sheet, .scrim.open .sheet, .select-bar, .toast, .v-info, .seg-thumb, .tab-thumb, .switch span::after, .tile, .tile img, .v-media { transition-property: opacity, background-color, color !important; }

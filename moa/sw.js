@@ -1,7 +1,7 @@
 /* Moa service worker — app shell offline cache.
    Photos are cached by the app itself (Cache Storage "moa-media-v1");
    GitHub API calls are never intercepted here. */
-const CACHE = 'moa-shell-v10';
+const CACHE = 'moa-shell-v11';
 const ASSETS = [
   './',
   './index.html',

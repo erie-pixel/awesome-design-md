@@ -138,6 +138,8 @@ export function parseIndex(text) {
 // friends editing at once never clobber each other.
 
 const EDITABLE = ['caption', 'takenAt', 'tz', 'ts', 'dateSource', 'gps', 'place'];
+/** What a replacement file brings with it (the rest of the photo stays). */
+export const REPLACED = ['kind', 'name', 'mime', 'size', 'hash', 'w', 'h', 'duration', 'files', 'liveMime', 'sizes', 'camera', 'contentId'];
 
 function uniqPush(arr, v) { if (!arr.includes(v)) arr.push(v); }
 function remove(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); }
@@ -181,7 +183,18 @@ export function applyOp(ix, op) {
       for (const id of op.ids) {
         delete P[id];
         for (const a of Object.values(ix.albums)) if (a.cover === id) delete a.cover;
+        if (ix.cover === id) delete ix.cover;
       }
+      break;
+    case 'replacePhoto': // a new file in the same place: tags, albums, likes, comments and caption stay
+      each([op.id], p => {
+        for (const k of REPLACED) delete p[k];
+        if ('gps' in op.set) delete p.place; // looked up again for the new location
+        for (const [k, v] of Object.entries(op.set)) if (v != null && v !== '') p[k] = v;
+        delete p.ai; delete p.aiv; // analysed again
+        p.replacedAt = op.at;
+        p.replacedBy = op.by;
+      });
       break;
     case 'createAlbum':
       if (!ix.albums[op.album.id]) ix.albums[op.album.id] = op.album;
@@ -197,8 +210,8 @@ export function applyOp(ix, op) {
       if (!ix.albums[op.album]) break;
       each(op.ids, p => { p.albums ||= []; op.on ? uniqPush(p.albums, op.album) : remove(p.albums, op.album); });
       break;
-    case 'setCover':
-      if (ix.albums[op.album]) ix.albums[op.album].cover = op.photo;
+    case 'setCover': // no album: the main photo, shown for the whole album on the home screen
+      if (!op.album) { if (op.photo) ix.cover = op.photo; else delete ix.cover; } else if (ix.albums[op.album]) ix.albums[op.album].cover = op.photo;
       break;
     case 'join':
       if (!ix.members[op.user]) ix.members[op.user] = { joinedAt: op.at };
@@ -223,10 +236,18 @@ export function filesOf(p) {
   return Object.entries(p.files || {}).filter(([k, v]) => v && !k.endsWith('Mime')).map(([, v]) => v).filter((v, i, a) => a.indexOf(v) === i);
 }
 
-/** Files of photos that were in `before` and are gone from `after`. */
+/** Files `before` used that `after` doesn't (deleted or replaced photos). */
 export function removedFiles(before, after) {
-  const keep = after?.photos || {};
-  return Object.values(before?.photos || {}).filter(p => !keep[p.id]).flatMap(filesOf);
+  const keep = new Set(Object.values(after?.photos || {}).flatMap(filesOf));
+  return Object.values(before?.photos || {}).flatMap(filesOf).filter(f => !keep.has(f));
+}
+
+/** Repository paths a replace op should remove: the old files the new ones don't reuse. */
+export function replacedFiles(ix, op) {
+  const old = ix?.photos?.[op.id];
+  if (!old) return [];
+  const keep = new Set(Object.values(op.set?.files || {}));
+  return filesOf(old).filter(f => !keep.has(f));
 }
 
 // ---------------- dates ----------------
@@ -512,10 +533,12 @@ export function placeTitle(place, level = 'city') {
 
 export const sortTs = p => p.ts ?? (Date.parse(p.uploadedAt) || 0);
 
-export function filterPhotos(list, { album, tag, kind, q, ai } = {}) {
+export function filterPhotos(list, { album, tag, kind, q, ai, area, month } = {}) {
   const query = (q || '').trim().toLowerCase();
   return list.filter(p => {
     if (album && !(p.albums || []).includes(album)) return false;
+    if (area && !inArea(p.gps, area)) return false;
+    if (month && monthOf(p) !== month) return false;
     if (tag && !(p.tags || []).includes(tag)) return false;
     if (ai && !(p.ai || []).includes(ai)) return false;
     if (kind === 'live' && !p.files?.live) return false;
@@ -580,7 +603,7 @@ export function groupByTag(list) {
     const tags = p.tags || [];
     if (!tags.length) { none.photos.push(p); continue; }
     for (const t of tags) {
-      if (!map.has(t)) map.set(t, { key: t, title: '#' + t, photos: [] });
+      if (!map.has(t)) map.set(t, { key: t, title: isSymbolTag(t) ? t : '#' + t, photos: [] });
       map.get(t).photos.push(p);
     }
   }
@@ -596,6 +619,97 @@ export function aiTagCounts(list) {
   const m = new Map();
   for (const p of list) for (const k of p.ai || []) m.set(k, (m.get(k) || 0) + 1);
   return [...m].sort((a, b) => b[1] - a[1]);
+}
+
+// ---------------- symbol tags: one-tap marks, like the ♥ ----------------
+
+export const SYMBOLS = [
+  { s: '⭐', w: ['star', 'best', 'favorite', 'fav', '별', '베스트', '최고', '즐겨찾기', '인생샷'] },
+  { s: '📌', w: ['pin', 'important', 'keep', '중요', '고정', '핀'] },
+  { s: '✈️', w: ['travel', 'trip', 'flight', 'vacation', '여행', '비행', '해외', '휴가'] },
+  { s: '🍽️', w: ['food', 'meal', 'dinner', 'lunch', 'restaurant', '음식', '맛집', '식사', '저녁', '점심'] },
+  { s: '🎉', w: ['party', 'celebrate', 'birthday', 'anniversary', '파티', '축하', '생일', '기념'] },
+  { s: '💝', w: ['love', 'couple', 'date', '사랑', '커플', '데이트'] },
+  { s: '🐾', w: ['pet', 'dog', 'cat', 'puppy', '반려', '강아지', '고양이', '댕댕'] },
+  { s: '🌿', w: ['nature', 'hike', 'walk', 'camping', '자연', '산책', '등산', '캠핑'] },
+  { s: '👶', w: ['baby', 'kid', 'child', '아기', '아이', '육아'] },
+  { s: '🏠', w: ['home', 'house', '집', '우리집'] },
+  { s: '🎵', w: ['music', 'concert', 'festival', '음악', '공연', '콘서트', '페스티벌'] },
+  { s: '🔖', w: ['later', 'todo', 'print', '나중', '인화', '할일'] },
+];
+
+/** A tag made only of symbols or emoji (no letters or digits): shown as a mark, without "#". */
+export const isSymbolTag = t => !!t && /^[^\p{L}\p{N}\s]+$/u.test(t) && [...t].length <= 8;
+
+/** Marks to offer in one tap: the ones this album already uses first, then the defaults. */
+export function quickSymbols(list, n = 8) {
+  const used = tagCounts(list).map(([t]) => t).filter(isSymbolTag);
+  return [...new Set([...used, ...SYMBOLS.map(x => x.s)])].slice(0, n);
+}
+
+/** While typing a tag: marks whose words fit what's typed, then existing tags that contain it. */
+export function suggestTags(input, existing = [], limit = 8) {
+  const q = normalizeTag(input);
+  if (!q) return [];
+  const out = [];
+  for (const { s, w } of SYMBOLS) if (w.some(x => x.startsWith(q) || (x.length > 1 && q.startsWith(x)))) out.push(s);
+  for (const t of existing) if (t !== q && t.includes(q) && !out.includes(t)) out.push(t);
+  return out.slice(0, limit);
+}
+
+// ---------------- map area, month ----------------
+
+export const monthOf = p => (p.takenAt || p.uploadedAt || '').slice(0, 7);
+
+/** area = { s, w, n, e } in degrees; w > e crosses the date line. */
+export function inArea(g, a) {
+  if (!g || g.lat < a.s || g.lat > a.n) return false;
+  return a.w <= a.e ? g.lng >= a.w && g.lng <= a.e : g.lng >= a.w || g.lng <= a.e;
+}
+
+/** Name for a set of photos' places: the most common city, "+n" for the rest. */
+export function areaName(list) {
+  const m = new Map();
+  for (const p of list) { const k = p.place && placeTitle(p.place); if (k) m.set(k, (m.get(k) || 0) + 1); }
+  const top = [...m].sort((a, b) => b[1] - a[1]);
+  return top.length ? { name: top[0][0], more: top.length - 1 } : null;
+}
+
+// ---------------- statistics ----------------
+
+/** Counts for the stats page. Dates are capture time as the camera recorded it. */
+export function photoStats(list) {
+  const months = new Map(), people = new Map(), places = new Map();
+  const weekdays = Array(7).fill(0), hours = Array(24).fill(0);
+  let videos = 0, lives = 0, located = 0, undated = 0;
+  for (const p of list) {
+    if (p.kind === 'video') videos++;
+    if (p.files?.live) lives++;
+    if (p.gps) located++;
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/.exec(p.takenAt || '');
+    if (m) {
+      const k = `${m[1]}-${m[2]}`;
+      months.set(k, (months.get(k) || 0) + 1);
+      weekdays[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]++;
+      hours[+m[4]]++;
+    } else undated++;
+    if (p.by) people.set(p.by, (people.get(p.by) || 0) + 1);
+    if (p.place) {
+      const k = placeKey(p.place);
+      if (k) { const e = places.get(k) || { key: k, title: placeTitle(p.place), country: p.place.country || '', n: 0 }; e.n++; places.set(k, e); }
+    }
+  }
+  const years = [...new Set([...months.keys()].map(k => k.slice(0, 4)))].sort();
+  const byYear = years.map(y => ({ year: y, total: 0, months: Array.from({ length: 12 }, (_, i) => { const n = months.get(`${y}-${pad(i + 1)}`) || 0; return n; }) }));
+  for (const y of byYear) y.total = y.months.reduce((a, b) => a + b, 0);
+  const sorted = m => [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+  return {
+    total: list.length, photos: list.length - videos, videos, lives, located, undated,
+    bytes: storageBytes(list), years: byYear,
+    busiest: sorted(months)[0] || null,
+    people: sorted(people), places: [...places.values()].sort((a, b) => b.n - a.n), tags: tagCounts(list),
+    weekdays, hours,
+  };
 }
 
 export function tagCounts(list) {

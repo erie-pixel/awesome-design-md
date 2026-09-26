@@ -510,6 +510,7 @@ async function showHome({ join } = {}) {
     ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>${t('home.viaToken')}</small></span><span class="val">›</span></button>`),
   ];
   $('#homeAlbums').innerHTML = rows.join('') || `<div class="row"><div class="grow"><b>${t('home.empty')}</b></div></div>`;
+  homeCovers(albums);
   w.onclick = async e => {
     const acc = e.target.closest('[data-accept]');
     const repo = e.target.closest('[data-repo]');
@@ -726,7 +727,7 @@ function scheduleFlush(ms = 2500) {
 function describe(ops) {
   const n = ops.length;
   const kinds = [...new Set(ops.map(o => o.op))];
-  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title' };
+  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title', replacePhoto: 'replace photo' };
   return `Moa: ${kinds.map(k => names[k] || k).join(', ')}${n > 1 ? ` (${n})` : ''}${S.me?.login ? ` — @${S.me.login}` : ''}`;
 }
 
@@ -778,6 +779,7 @@ function rerender() {
 
 function render() {
   if (!S.index) return;
+  rememberCover();
   $('#uploadBtn').hidden = !S.canWrite;
   $('#uploadFab').hidden = !S.canWrite;
   $('#selectBtn').hidden = S.tab !== 'photos' || S.view === 'map' || !S.canWrite;
@@ -923,7 +925,7 @@ function uploadPlanHTML(E, keepOriginal) {
 // ---------------- photos tab ----------------
 
 function currentList() {
-  const f = { album: S.album, tag: S.filter.tag, kind: S.filter.kind, ai: S.filter.ai };
+  const f = { album: S.album, tag: S.filter.tag, kind: S.filter.kind, ai: S.filter.ai, area: S.filter.area, month: S.filter.month };
   const list = C.filterPhotos(photos(), { ...f, q: S.filter.q });
   // search by description (on-device AI): add what it found that the words alone didn't
   const sem = S.semantic;
@@ -1000,7 +1002,36 @@ function groupCard(g, sub, center) {
 }
 
 function tileHTML(p) {
-  return `<button class="tile${S.selected.has(p.id) ? ' sel' : ''}" data-id="${esc(p.id)}" aria-label="${esc(p.name || t('photo'))}">${thumbImg(p.files?.thumb)}${p.files?.live ? `<span class="badge">${ICON.live}</span>` : ''}${p.kind === 'video' ? `<span class="dur">${fmtDur(p.duration)}</span>` : ''}${p.likes?.length ? ICON.heart : ''}<span class="check"></span></button>`;
+  return `<button class="tile${S.selected.has(p.id) ? ' sel' : ''}" data-id="${esc(p.id)}" aria-label="${esc(p.name || t('photo'))}">${thumbImg(p.files?.thumb)}${p.files?.live ? `<span class="badge">${ICON.live}</span>` : ''}${p.kind === 'video' ? `<span class="dur">${fmtDur(p.duration)}</span>` : ''}${p.likes?.length ? ICON.heart : ''}${marksOf(p).length ? `<span class="marks">${marksOf(p).slice(0, 3).map(esc).join('')}</span>` : ''}<span class="check"></span></button>`;
+}
+
+// ---------------- symbol tags: one-tap marks (⭐ 📌 ✈️ …), shown like the ♥ ----------------
+
+const marksOf = p => (p.tags || []).filter(C.isSymbolTag);
+const tagLabel = tg => (C.isSymbolTag(tg) ? tg : '#' + tg);
+
+/** Suggestions under a tag field as you type: matching marks first, then tags already in use. */
+function bindTagSuggest(input, box, onPick) {
+  const draw = () => {
+    const last = input.value.split(/[,，]/).pop();
+    const sug = C.suggestTags(last, C.tagCounts(photos()).map(([tg]) => tg));
+    box.innerHTML = sug.map(tg => `<button type="button" class="chip${C.isSymbolTag(tg) ? ' mark' : ''}" data-sug="${esc(tg)}">${esc(tagLabel(tg))}</button>`).join('');
+    box.hidden = !sug.length;
+  };
+  input.addEventListener('input', draw);
+  box.addEventListener('click', e => {
+    const b = e.target.closest('[data-sug]');
+    if (!b) return;
+    e.stopPropagation();
+    onPick(b.dataset.sug);
+    draw();
+  });
+  box.hidden = true;
+}
+
+function marksRowHTML(on, extra = []) {
+  const list = [...new Set([...extra, ...C.quickSymbols(photos())])];
+  return `<div class="marks-row" role="group" aria-label="${t('marks.title')}">${list.map(m => `<button type="button" class="mark${on.includes(m) ? ' on' : ''}" data-mark="${esc(m)}" aria-pressed="${on.includes(m)}">${esc(m)}</button>`).join('')}</div>`;
 }
 
 function renderHero(all) {
@@ -1040,14 +1071,17 @@ function renderToolbar(all) {
   const lives = all.filter(p => p.files?.live).length;
   const videos = all.filter(p => p.kind === 'video').length;
   const favs = all.filter(p => p.likes?.length).length;
-  const tags = C.tagCounts(all).slice(0, 40);
+  const counted = C.tagCounts(all);
+  const tags = [...counted.filter(([tg]) => C.isSymbolTag(tg)), ...counted.filter(([tg]) => !C.isSymbolTag(tg))].slice(0, 40);
   $('#chips').innerHTML = [
-    `<button class="chip${!f.kind && !f.tag && !f.ai ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
+    f.area ? `<button class="chip on scope" data-chip="area" aria-label="${t('area.clear')}">${ICON.pin}${esc(f.area.label)} <span class="x">✕</span></button>` : '',
+    f.month ? `<button class="chip on scope" data-chip="month" aria-label="${t('area.clear')}">${esc(fmtMonth(f.month))} <span class="x">✕</span></button>` : '',
+    `<button class="chip${!f.kind && !f.tag && !f.ai && !f.area && !f.month ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
     videos ? `<button class="chip${f.kind === 'photo' ? ' on' : ''}" data-chip="kind" data-v="photo">${t('chip.photos')} <span class="n">${all.length - videos}</span></button>` : '',
     lives ? `<button class="chip${f.kind === 'live' ? ' on' : ''}" data-chip="kind" data-v="live">${ICON.live}LIVE <span class="n">${lives}</span></button>` : '',
     videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">${t('chip.videos')} <span class="n">${videos}</span></button>` : '',
     favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ ${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
-    ...tags.map(([tg, n]) => `<button class="chip${f.tag === tg ? ' on' : ''}" data-chip="tag" data-v="${esc(tg)}">#${esc(tg)} <span class="n">${n}</span></button>`),
+    ...tags.map(([tg, n]) => `<button class="chip${C.isSymbolTag(tg) ? ' mark' : ''}${f.tag === tg ? ' on' : ''}" data-chip="tag" data-v="${esc(tg)}">${esc(tagLabel(tg))} <span class="n">${n}</span></button>`),
     ...C.aiTagCounts(all).slice(0, 20).map(([k, n]) => `<button class="chip ai${f.ai === k ? ' on' : ''}" data-chip="ai" data-v="${esc(k)}">${ICON.spark}${esc(labelName(k, lang()))} <span class="n">${n}</span></button>`),
   ].join('');
 }
@@ -1059,7 +1093,7 @@ function renderMap(list, c) {
   S.list = pts;
   if (!window.L) { c.innerHTML = `<div class="empty"><p>${t('map.failed')}</p></div>`; return; }
   S.map?.remove();
-  c.innerHTML = `<div class="map-wrap"><div id="map" style="width:100%;height:100%"></div><div class="map-note">${pts.length ? t('n.photos', { n: pts.length }) : t('map.none')}</div></div>`;
+  c.innerHTML = `<div class="map-wrap"><div id="map" style="width:100%;height:100%"></div>${pts.length ? `<button class="map-note map-area" id="mapArea"></button>` : `<div class="map-note">${t('map.none')}</div>`}</div>`;
   const map = S.map = L.map('map', { worldCopyJump: true, zoomControl: !matchMedia('(pointer: coarse)').matches });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
   const layer = L.layerGroup().addTo(map);
@@ -1076,20 +1110,58 @@ function renderMap(list, c) {
       L.marker([cl.lat, cl.lng], { icon, riseOnHover: true }).addTo(layer).on('click', () => {
         if (cl.photos.length === 1) return openViewer(p0.id, pts);
         const b = L.latLngBounds(cl.photos.map(p => [p.gps.lat, p.gps.lng]));
-        if (z >= 16 || b.getNorthEast().distanceTo(b.getSouthWest()) < 30) openClusterSheet(cl.photos);
-        else map.flyToBounds(b.pad(0.4), { maxZoom: 18, duration: 0.6 });
+        const tight = z >= 16 || b.getNorthEast().distanceTo(b.getSouthWest()) < 30;
+        openClusterSheet(cl.photos, { area: areaOf(b.pad(0.05)), zoom: tight ? null : () => map.flyToBounds(b.pad(0.4), { maxZoom: 18, duration: 0.6 }) });
       });
     }
     $$('#map img[data-thumb]').forEach(loadThumb);
   };
+  // "Photos in this area": only what the map shows right now
+  const inView = () => { const a = areaOf(map.getBounds()); return { a, list: pts.filter(p => C.inArea(p.gps, a)) }; };
+  const note = () => {
+    const btn = $('#mapArea');
+    if (!btn) return;
+    const { list } = inView();
+    btn.innerHTML = list.length ? `${t('area.show', { n: list.length })} <span aria-hidden="true">›</span>` : t('area.none');
+    btn.disabled = !list.length;
+  };
+  $('#mapArea')?.addEventListener('click', () => { const { a, list } = inView(); if (list.length) showArea({ ...a, label: areaLabel(list) }); });
   map.on('zoomend', draw);
+  map.on('moveend', note);
   draw();
+  note();
   setTimeout(() => { if (S.map === map) map.invalidateSize(); }, 50); // the view may have changed (and removed this map) meanwhile
 }
 
-function openClusterSheet(list) {
-  const sh = openSheet(`<h2>${t('n.photos', { n: list.length })}</h2><div class="grid" style="margin:0 -20px">${list.map(tileHTML).join('')}</div>`, { kind: 'cluster' });
+/** Leaflet bounds → { s, w, n, e } with longitudes back in -180…180 (the map can wrap). */
+function areaOf(b) {
+  const s = Math.max(-90, b.getSouth()), n = Math.min(90, b.getNorth());
+  if (b.getEast() - b.getWest() >= 360) return { s, n, w: -180, e: 180 };
+  const wrap = x => ((((x + 180) % 360) + 360) % 360) - 180;
+  return { s, n, w: wrap(b.getWest()), e: wrap(b.getEast()) };
+}
+
+function areaLabel(list) {
+  const a = C.areaName(list);
+  return a ? (a.more ? t('area.more', { name: a.name, n: a.more }) : a.name) : t('area.here');
+}
+
+/** Only the photos taken in an area: back to the grid with a removable "📍 place" filter. */
+function showArea(area) {
+  closeSheet();
+  S.filter.area = area;
+  S.view = 'date';
+  showTab('photos');
+  window.scrollTo(0, 0);
+}
+
+function openClusterSheet(list, { area = null, zoom = null } = {}) {
+  const sh = openSheet(`<h2>${area ? esc(areaLabel(list)) : ''} <small>${t('n.photos', { n: list.length })}</small></h2>
+    ${area ? `<div class="actions" style="margin:0 0 14px">${zoom ? `<button class="btn btn-quiet" id="clZoom">${t('area.zoom')}</button>` : ''}<button class="btn btn-primary" id="clOnly">${t('area.only')}</button></div>` : ''}
+    <div class="grid" style="margin:0 -20px">${list.map(tileHTML).join('')}</div>`, { kind: 'cluster' });
   observeThumbs(sh);
+  $('#clOnly', sh)?.addEventListener('click', () => showArea({ ...area, label: areaLabel(list) }));
+  $('#clZoom', sh)?.addEventListener('click', () => { closeSheet(); zoom(); });
   sh.onclick = e => { const tile = e.target.closest('.tile'); if (tile) { closeSheet(); openViewer(tile.dataset.id, list); } };
 }
 
@@ -1125,6 +1197,7 @@ function renderAlbums() {
       ${smart.map(([k, name, l]) => card(`${coverHTML(newest(l))}<b>${name}</b><span>${l.length}</span>`, `data-smart="${k}"`)).join('')}
       ${places ? card(`${coverHTML(newest(all.filter(p => p.place)))}<b>${t('smart.places')}</b><span>${places}</span>`, 'data-smart="place"') : ''}
       ${tags ? card(`${coverHTML(all.find(p => p.tags?.length))}<b>${t('smart.tags')}</b><span>${tags}</span>`, 'data-smart="tag"') : ''}
+      ${all.length ? card(`<div class="cover stats-cover">${statsSpark(all)}</div><b>${t('stats.title')}</b><span>${t('n.photos', { n: all.length })}</span>`, 'data-act="stats"') : ''}
     </div>`;
   observeThumbs(el);
 }
@@ -1147,8 +1220,12 @@ function newAlbum(then) {
 
 function albumMenu() {
   const a = S.index.albums[S.album];
+  const { cover } = albumCover(a, S.album);
   const sh = openSheet(`<h2>${t('albumEdit.title')}</h2><label class="field"><span>${t('newAlbum.name')}</span><input id="albumName" value="${esc(a.name)}" maxlength="60"></label>
+    ${cover ? `<button class="cover-row" id="albumCover"><span class="cover-thumb">${thumbImg(cover.files.thumb)}</span><span class="grow"><b>${t('cover.album')}</b><small>${t(a.cover ? 'cover.chosen' : 'cover.auto')}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
     <div class="actions"><button class="btn btn-danger" id="albumDel">${t('albumEdit.delete')}</button><button class="btn btn-primary" id="albumOk">${t('common.save')}</button></div>`);
+  observeThumbs(sh);
+  $('#albumCover', sh)?.addEventListener('click', () => albumCoverSheet(S.album));
   $('#albumOk', sh).onclick = () => { const n = $('#albumName', sh).value.trim(); if (n && n !== a.name) edit({ op: 'renameAlbum', id: S.album, name: n }); closeSheet(); };
   $('#albumDel', sh).onclick = () => {
     if (!confirm(t('albumEdit.confirm', { name: a.name }))) return;
@@ -1194,6 +1271,8 @@ function renderSettings() {
     <div class="panel">
       <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? `⚠️ ${t('home.public')}` : t('set.private')} · ${esc(S.gh.branch)}${S.canWrite ? '' : ` · ${t('set.readonly')}`}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
       ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : ''}
+      ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && S.index.photos[S.index.cover] ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
+      ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
       ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
       ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>
       <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.title')}</b><small>${t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet')}</small></span><span class="val">›</span></button>` : ''}
@@ -1230,6 +1309,7 @@ function renderSettings() {
     <h2 class="section-title">${t('set.account')}</h2>
     <div class="panel"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b></div>${S.auth ? `<button class="text-btn danger" data-act="logout">${t('auth.signOut')}</button>` : ''}</div></div>`;
   $('[data-lang]', el).value = lang();
+  observeThumbs(el);
   // draw the ring from empty once it's on screen
   requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', el).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
 }
@@ -1502,6 +1582,200 @@ function spaceSheet() {
 
 // ---------------- selection ----------------
 
+// ---------------- statistics ----------------
+// One series per chart, one hue (the app's accent), recessive axes, the peak labelled,
+// every bar a button with its value spoken and shown on hover/focus.
+
+const monthShort = m => new Date(Date.UTC(2000, m, 1)).toLocaleDateString(locale(), { timeZone: 'UTC', month: 'short' });
+const weekdayShort = d => new Date(Date.UTC(2000, 0, 2 + d)).toLocaleDateString(locale(), { timeZone: 'UTC', weekday: 'short' }); // 2000-01-02 was a Sunday
+
+/** Vertical bars. items: [{ label, value, tip, attrs }] */
+function vbarsHTML(items, { cls = '' } = {}) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  const peak = items.findIndex(i => i.value === max && max > 0);
+  return `<div class="vbars ${cls}" role="list">${items.map((it, k) => `<div class="vcol" role="listitem">
+    <button class="vbar${it.value ? '' : ' zero'}" style="--h:${(it.value / max).toFixed(3)}" aria-label="${esc(it.tip)}" ${it.attrs || ''}${it.value ? '' : ' disabled'}>${k === peak ? `<span class="peak">${it.value}</span>` : ''}<i></i><span class="tip" aria-hidden="true">${esc(it.tip)}</span></button>
+    <span class="vlbl">${esc(it.label)}</span></div>`).join('')}</div>`;
+}
+
+/** Ranked horizontal bars. rows: [{ label, value, lead? }] */
+function hbarsHTML(rows) {
+  const max = Math.max(1, ...rows.map(r => r.value));
+  return `<div class="hbars">${rows.map(r => `<div class="hrow">${r.lead || ''}<span class="hlbl">${esc(r.label)}</span><span class="htrack"><i style="width:${Math.max(2, (r.value / max) * 100).toFixed(1)}%"></i></span><span class="hval">${r.value}</span></div>`).join('')}</div>`;
+}
+
+/** Tiny last-12-months bars for the Collections card. */
+function statsSpark(list) {
+  const now = new Date(), keys = [];
+  for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
+  const n = keys.map(k => list.filter(p => (p.takenAt || '').startsWith(k)).length);
+  const max = Math.max(1, ...n);
+  return `<svg viewBox="0 0 120 80" aria-hidden="true">${n.map((v, i) => { const h = Math.max(2, (v / max) * 60); return `<rect x="${6 + i * 9.4}" y="${70 - h}" width="6.6" height="${h}" rx="2"/>`; }).join('')}</svg>`;
+}
+
+function showStats(year = null) {
+  const all = S.album ? photos().filter(p => (p.albums || []).includes(S.album)) : photos();
+  const st = C.photoStats(all);
+  const y = st.years.find(x => x.year === year) || st.years[st.years.length - 1];
+  const pct = n => (st.total ? Math.round((n / st.total) * 100) : 0);
+  const tiles = [
+    [t('stats.photos'), st.photos], [t('chip.videos'), st.videos], ['LIVE', st.lives],
+    [t('stats.located'), `${pct(st.located)}%`], [t('stats.size'), C.fmtBytes(st.bytes)],
+  ];
+  const busiest = st.busiest ? t('stats.busiest', { m: fmtMonth(st.busiest[0]), n: st.busiest[1] }) : '';
+  const sh = openSheet(`<h2>${t('stats.title')} <small>${esc(S.album ? S.index.albums[S.album]?.name : S.index.title || '')}</small></h2>
+    <div class="stat-tiles">${tiles.map(([k, v]) => `<div class="stat-tile"><b>${v}</b><span>${k}</span></div>`).join('')}</div>
+    ${y ? `<h4 class="sheet-h4">${t('stats.monthly')}</h4>
+      <div class="year-chips">${st.years.slice().reverse().map(x => `<button class="chip${x === y ? ' on' : ''}" data-year="${x.year}">${x.year} <span class="n">${x.total}</span></button>`).join('')}</div>
+      ${vbarsHTML(y.months.map((v, m) => ({ label: monthShort(m), value: v, tip: `${fmtMonth(`${y.year}-${String(m + 1).padStart(2, '0')}`)} · ${t('n.photos', { n: v })}`, attrs: `data-month="${y.year}-${String(m + 1).padStart(2, '0')}"` })))}
+      <p class="stat-note">${busiest}${busiest ? ' · ' : ''}${t('stats.tapMonth')}</p>` : ''}
+    ${st.years.length > 1 ? `<h4 class="sheet-h4">${t('stats.yearly')}</h4>${hbarsHTML(st.years.slice().reverse().map(x => ({ label: x.year, value: x.total })))}` : ''}
+    ${y ? `<h4 class="sheet-h4">${t('stats.weekday')}</h4>${vbarsHTML(st.weekdays.map((v, d) => ({ label: weekdayShort(d), value: v, tip: `${weekdayShort(d)} · ${t('n.photos', { n: v })}` })), { cls: 'short' })}
+      <h4 class="sheet-h4">${t('stats.hour')}</h4>${vbarsHTML(st.hours.map((v, h) => ({ label: h % 6 === 0 ? String(h) : '', value: v, tip: `${h}:00 · ${t('n.photos', { n: v })}` })), { cls: 'short dense' })}` : ''}
+    ${st.people.length > 1 ? `<h4 class="sheet-h4">${t('stats.people')}</h4>${hbarsHTML(st.people.map(([login, n]) => ({ label: '@' + login, value: n, lead: `<img class="avatar sm" alt="" src="${esc(avatar(login))}" loading="lazy">` })))}` : ''}
+    ${st.places.length ? `<h4 class="sheet-h4">${t('stats.places')}</h4>${hbarsHTML(st.places.slice(0, 6).map(x => ({ label: x.title, value: x.n })))}` : ''}
+    ${st.tags.length ? `<h4 class="sheet-h4">${t('stats.tags')}</h4>${hbarsHTML(st.tags.slice(0, 8).map(([tg, n]) => ({ label: tagLabel(tg), value: n })))}` : ''}
+    ${st.undated ? `<p class="stat-note">${t('stats.undated', { n: st.undated })}</p>` : ''}`, { kind: 'stats' });
+  sh.onclick = e => {
+    const yb = e.target.closest('[data-year]');
+    if (yb) { const top = sh.scrollTop; showStats(yb.dataset.year); $('#sheet').scrollTop = top; return; }
+    const mb = e.target.closest('[data-month]');
+    if (mb) {
+      closeSheet();
+      S.filter.month = mb.dataset.month;
+      S.view = 'date';
+      showTab('photos');
+      window.scrollTo(0, 0);
+    }
+  };
+}
+
+// ---------------- replace a photo: a new file, same place in the album ----------------
+
+function pickReplacement(p) {
+  if (U.running || CONV.running) return toast(t('up.busy'));
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*,video/*,.heic,.heif,.mov';
+  inp.multiple = true; // a Live Photo is two files
+  inp.onchange = () => { if (inp.files.length) replaceSheet(p, [...inp.files]); };
+  inp.click();
+}
+
+async function replaceSheet(p, files) {
+  files = files.filter(f => !/\.(aae|xmp|json)$/i.test(f.name));
+  let cancelled = false;
+  openSheet(`<h2>${t('up.reading')}</h2><div class="progress"><i style="transform:scaleX(.5)"></i></div>`, { kind: 'replace', onClose: () => { cancelled = true; } });
+  const items = [];
+  for (let i = 0; i < files.length; i++) items.push(await analyzeFile(files[i], 'x' + i));
+  const entries = buildEntries(items).filter(e => !e.main.error);
+  if (cancelled) return;
+  if (entries.length !== 1) { closeSheet(); return toast(t(entries.length ? 'replace.one' : 'replace.unreadable'), 4000); }
+  const e = entries[0], m = e.main;
+  if (m.hash && m.hash === p.hash) { closeSheet(); return toast(t('replace.same')); }
+  const url = m.kind === 'photo' ? URL.createObjectURL(m.file) : '';
+  const newDate = m.meta.takenAt && m.meta.takenAt !== p.takenAt, newGps = !!m.meta.gps && JSON.stringify(m.meta.gps) !== JSON.stringify(p.gps);
+  openSheet(`<h2>${t('replace.title')}</h2>
+    <div class="replace-pair"><figure>${thumbImg(p.files.thumb)}<figcaption>${t('replace.now')}</figcaption></figure><span aria-hidden="true">→</span><figure>${url ? `<img alt="" src="${url}">` : `<div class="ph">▶</div>`}<figcaption>${esc(m.name)}${e.live ? ' · LIVE' : ''}</figcaption></figure></div>
+    <p class="sheet-p">${t('replace.keeps')}</p>
+    ${newDate || newGps ? `<div class="row opt-row"><div class="grow"><b>${t('replace.useMeta')}</b><small>${[newDate ? fmtDate(m.meta.takenAt) : '', newGps ? t('info.place') : ''].filter(Boolean).join(' · ')}</small></div><label class="switch"><input type="checkbox" id="rpMeta"${!p.takenAt || p.dateSource !== 'exif' ? ' checked' : ''}><span></span></label></div>` : ''}
+    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b><small>${t('replace.purgeNote')}</small></div><label class="switch"><input type="checkbox" id="rpPurge"><span></span></label></div>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="rpGo">${t('replace.go')}</button></div>`,
+  { kind: 'replace', onClose: () => url && URL.revokeObjectURL(url) });
+  observeThumbs($('#sheet'));
+  $('#rpGo').onclick = () => runReplace(p, e, { meta: !!$('#rpMeta')?.checked, purge: $('#rpPurge').checked });
+}
+
+async function runReplace(old, e, { meta, purge }) {
+  const sp = S.space;
+  const sh = openSheet(`<h2>${t('replace.working')}</h2><div class="progress"><i id="rpBar"></i></div>`, { kind: 'replace-run' });
+  const done = () => { if (sheetOpen() && sh.dataset.kind === 'replace-run') closeSheet(); };
+  const bar = $('#rpBar', sh);
+  ringProgress(0);
+  try {
+    // setEntryStatus reports each file as it goes up
+    const tick = () => { if (e.status?.k === 'uploading') { const f = (e.status.i - 1) / e.status.n; bar && (bar.style.transform = `scaleX(${f})`); ringProgress(f); } };
+    const timer = setInterval(tick, 200);
+    let photo, files;
+    try { ({ photo, files } = await preparePhoto(e, { keepOriginal: !!(old.files.original && old.kind === 'photo') || prefs.keepOriginal, tags: [], album: null })); } finally { clearInterval(timer); }
+    if (S.space !== sp) return;
+    const set = Object.fromEntries(C.REPLACED.map(k => [k, photo[k]]));
+    if (meta || !old.takenAt) Object.assign(set, { takenAt: photo.takenAt, tz: photo.tz, ts: photo.ts, dateSource: photo.dateSource });
+    if ((meta || !old.gps) && photo.gps) set.gps = photo.gps;
+    const op = { op: 'replacePhoto', id: old.id, set, at: new Date().toISOString(), by: S.me.login };
+    await serial(async () => {
+      const r = await S.gh.commit({ files, ops: [op], message: `Moa: replace ${old.name || 'photo'} — @${S.me.login}`, base: S.base, title: S.index?.title });
+      if (S.space === sp) adopt(r);
+    });
+    ringDone();
+    done();
+    toast(t('replace.done'));
+    runGeocodeJob();
+    scheduleAi();
+    if (purge) eraseHistory();
+  } catch (err) {
+    console.error(err);
+    ringProgress(null);
+    done();
+    toast(t('replace.failed', { e: errMsg(err) }), 5000);
+  }
+}
+
+// ---------------- album covers: the main photo (home screen) and each album's cover ----------------
+
+const COVERS = 'moa.covers'; // album id → thumbnail path, so the home screen can show it without opening the album
+
+function libraryCover() {
+  const ix = S.index;
+  return (ix?.cover && ix.photos[ix.cover]) || photos().sort((a, b) => C.sortTs(b) - C.sortTs(a))[0] || null;
+}
+
+function rememberCover() {
+  if (!S.space || !S.gh) return;
+  const m = load(COVERS, {});
+  const v = S.gh.sealed ? null : libraryCover()?.files?.thumb || null; // an encrypted album's photos stay behind its lock
+  if ((m[S.space.id] || null) === v) return;
+  if (v) m[S.space.id] = v; else delete m[S.space.id];
+  save(COVERS, m);
+}
+
+/** Home rows: each album's main photo, from this device's cache (fetched once if it's gone). */
+function homeCovers(albums) {
+  const m = load(COVERS, {});
+  for (const r of albums) {
+    const path = m[r.full_name.toLowerCase()];
+    if (!path || isEncryptedRepo(r)) continue;
+    const gh = new Repo({ owner: r.owner.login, repo: r.name, branch: r.default_branch, token: S.auth.token, api: loginApi() });
+    gh.media(path).then(b => {
+      const dot = $(`[data-repo="${CSS.escape(r.full_name)}"] .album-dot`);
+      if (!dot) return;
+      const img = new Image();
+      img.alt = '';
+      img.onload = () => { dot.classList.add('has-cover'); setTimeout(() => URL.revokeObjectURL(img.src), 1000); };
+      img.src = URL.createObjectURL(b);
+      dot.append(img);
+    }).catch(() => {});
+  }
+}
+
+/** Pick one photo from a list (album cover, main photo). */
+function pickPhotoSheet(title, list, current, onPick) {
+  const sorted = [...list].sort((a, b) => C.sortTs(b) - C.sortTs(a));
+  const sh = openSheet(`<h2>${esc(title)}</h2><div class="grid pick-grid" style="margin:0 -20px">${sorted.map(p => tileHTML(p).replace('class="tile', `class="tile${p.id === current ? ' current' : ''}`)).join('')}</div>`, { kind: 'cluster' });
+  observeThumbs(sh);
+  sh.onclick = e => { const tile = e.target.closest('.tile'); if (tile) { closeSheet(); onPick(tile.dataset.id); } };
+}
+
+function mainCoverSheet() {
+  pickPhotoSheet(t('cover.main'), photos(), S.index.cover, id => { edit({ op: 'setCover', photo: id }); toast(t('cover.mainSet')); });
+}
+
+function albumCoverSheet(albumId) {
+  const inAlbum = photos().filter(p => (p.albums || []).includes(albumId));
+  if (!inAlbum.length) return toast(t('empty.album'));
+  pickPhotoSheet(t('cover.album'), inAlbum, S.index.albums[albumId]?.cover, id => { edit({ op: 'setCover', album: albumId, photo: id }); toast(t('info.coverSet')); });
+}
+
 function setSelecting(on) {
   S.selecting = on;
   if (!on) S.selected.clear();
@@ -1515,16 +1789,26 @@ function setSelecting(on) {
 function updateSelCount() { $('#selCount').textContent = t('selected', { n: S.selected.size }); }
 
 function tagSheet(ids) {
-  const existing = C.tagCounts(photos()).slice(0, 24);
+  const existing = C.tagCounts(photos()).filter(([tg]) => !C.isSymbolTag(tg)).slice(0, 24);
   const sh = openSheet(`<h2>${t('tags.title')} <small>${t('n.photos', { n: ids.length })}</small></h2>
-    <label class="field"><span>${t('tags.new')}</span><input id="tagIn" placeholder="${t('tags.ph')}" enterkeyhint="done"></label>
+    <h4 class="sheet-h4">${t('marks.title')}</h4>${marksRowHTML([])}
+    <label class="field"><span>${t('tags.new')}</span><input id="tagIn" placeholder="${t('tags.ph')}" enterkeyhint="done" autocomplete="off"></label>
+    <div class="tag-suggest" id="tagSug"></div>
     ${existing.length ? `<div class="tag-suggest">${existing.map(([tg]) => `<button class="chip" data-t="${esc(tg)}">#${esc(tg)}</button>`).join('')}</div>` : ''}
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="tagOk">${t('common.add')}</button></div>`);
   const inp = $('#tagIn', sh);
   setTimeout(() => inp.focus(), 50);
-  sh.addEventListener('click', e => { const c = e.target.closest('[data-t]'); if (c) c.classList.toggle('on'); });
+  bindTagSuggest(inp, $('#tagSug', sh), tg => {
+    const parts = inp.value.split(/[,，]/); parts.pop();
+    inp.value = [...parts.map(x => x.trim()).filter(Boolean), tg].join(', ') + ', ';
+    inp.focus();
+  });
+  sh.addEventListener('click', e => {
+    const c = e.target.closest('[data-t]'); if (c) c.classList.toggle('on');
+    const m = e.target.closest('[data-mark]'); if (m) { m.classList.toggle('on'); m.setAttribute('aria-pressed', m.classList.contains('on')); }
+  });
   const ok = () => {
-    const tags = [...inp.value.split(/[,，]/), ...$$('.chip.on', sh).map(c => c.dataset.t)].map(C.normalizeTag).filter(Boolean);
+    const tags = [...inp.value.split(/[,，]/), ...$$('.chip.on', sh).map(c => c.dataset.t), ...$$('.mark.on', sh).map(c => c.dataset.mark)].map(C.normalizeTag).filter(Boolean);
     if (!tags.length) return inp.focus();
     for (const tg of new Set(tags)) edit({ op: 'tag', ids, tag: tg, on: true });
     closeSheet();
@@ -1975,7 +2259,7 @@ function refreshViewer() {
   if (!V.list.length) return closeViewer();
   V.i = Math.min(V.i, V.list.length - 1);
   const p = currentPhoto();
-  if (p !== V.p) { if (V.p?.id === p.id) { V.p = p; viewerChrome(); if (V.info) renderInfo(); } else showCurrent(); }
+  if (p !== V.p) { if (V.p?.id === p.id && V.p.files?.thumb === p.files?.thumb) { V.p = p; viewerChrome(); if (V.info) renderInfo(); } else showCurrent(); }
 }
 
 function viewerChrome() {
@@ -2220,7 +2504,8 @@ function renderInfo() {
   const box = $('#vInfo');
   const scroll = box.scrollTop;
   const albums = Object.entries(S.index.albums);
-  const allTags = C.tagCounts(photos()).map(([tg]) => tg).filter(tg => !(p.tags || []).includes(tg)).slice(0, 10);
+  const allTags = C.tagCounts(photos()).map(([tg]) => tg).filter(tg => !C.isSymbolTag(tg) && !(p.tags || []).includes(tg)).slice(0, 10);
+  const words = (p.tags || []).filter(tg => !C.isSymbolTag(tg));
   const day = (p.takenAt || '').slice(0, 10);
   const cam = [p.camera?.model || p.camera?.make, p.camera?.lens && p.camera.lens.replace(p.camera.model || '', '').trim()].filter(Boolean).join(' · ');
   const sizes = [p.w && p.h ? `${p.w} × ${p.h}` : '', p.size ? C.fmtBytes(p.size) : '', p.duration ? fmtDur(p.duration) : '', p.name].filter(Boolean).join(' · ');
@@ -2229,8 +2514,10 @@ function renderInfo() {
     ${w ? `<textarea id="iCap" rows="1" placeholder="${t('info.caption')}" maxlength="500">${esc(p.caption || '')}</textarea>` : p.caption ? `<div class="kv">${esc(p.caption)}</div>` : ''}
     ${p.ai?.length ? `<h4>${t('ai.tags')}</h4><div class="tagrow">${p.ai.map(k => `<span class="chip ai">${ICON.spark}${esc(labelName(k, lang()))}${w ? `<button data-i="unai" data-t="${esc(k)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
     <h4>${t('info.tags')}</h4>
-    ${p.tags?.length ? `<div class="tagrow">${p.tags.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
+    ${w ? marksRowHTML(marksOf(p), marksOf(p)) : marksOf(p).length ? `<div class="marks-row">${marksOf(p).map(m => `<span class="mark on">${esc(m)}</span>`).join('')}</div>` : ''}
+    ${words.length ? `<div class="tagrow">${words.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
     ${w ? `<input type="text" id="iTag" placeholder="${t('info.addTag')}" enterkeyhint="done" autocomplete="off">
+    <div class="tag-suggest" id="iTagSug"></div>
     ${allTags.length ? `<div class="tag-suggest">${allTags.map(tg => `<button class="chip" data-i="tag" data-t="${esc(tg)}">+ ${esc(tg)}</button>`).join('')}</div>` : ''}` : ''}
     <h4>${t('info.date')} ${w ? `<button data-i="editDate">${t('common.edit')}</button>` : ''}</h4>
     <div class="kv" id="iDate">${/^\d{4}-\d{2}-\d{2}$/.test(day) ? fmtDay(day) : '—'} ${fmtTime(p.takenAt)}${p.tz ? `<small>UTC${p.tz}</small>` : ''}</div>
@@ -2250,6 +2537,8 @@ function renderInfo() {
       <button class="btn btn-quiet btn-sm" data-i="download">${t(p.files.original ? 'info.dlOriginal' : 'info.dlJpeg')}</button>
       ${p.files.live ? `<button class="btn btn-quiet btn-sm" data-i="downloadLive">${t('info.dlLive')}</button>` : ''}
       ${w && S.album ? `<button class="btn btn-quiet btn-sm" data-i="cover">${t('info.setCover')}</button>` : ''}
+      ${w && !S.album ? `<button class="btn btn-quiet btn-sm" data-i="mainCover">${t('cover.setMain')}</button>` : ''}
+      ${w ? `<button class="btn btn-quiet btn-sm" data-i="replace">${t('replace.btn')}</button>` : ''}
       ${w ? `<button class="btn btn-danger btn-sm" data-i="delete">${t('common.delete')}</button>` : ''}
     </div>`;
   box.scrollTop = scroll;
@@ -2273,6 +2562,11 @@ function renderInfo() {
     tagIn.value = '';
     setTimeout(() => $('#iTag')?.focus(), 90);
   };
+  if (tagIn) bindTagSuggest(tagIn, $('#iTagSug', box), tg => {
+    edit({ op: 'tag', ids: [p.id], tag: tg, on: true });
+    tagIn.value = '';
+    setTimeout(() => $('#iTag')?.focus(), 90);
+  });
   const cmt = $('#iCmt', box);
   if (cmt) cmt.onkeydown = e => {
     if (e.key !== 'Enter' || e.isComposing || !cmt.value.trim()) return;
@@ -2280,6 +2574,8 @@ function renderInfo() {
     cmt.value = '';
   };
   box.onclick = e => {
+    const mk = w && e.target.closest('[data-mark]');
+    if (mk) return edit({ op: 'tag', ids: [p.id], tag: mk.dataset.mark, on: !(p.tags || []).includes(mk.dataset.mark) });
     const b = e.target.closest('[data-i]');
     if (!b || b.tagName === 'INPUT' && b.type !== 'checkbox') return;
     switch (b.dataset.i) {
@@ -2295,6 +2591,8 @@ function renderInfo() {
       case 'download': return download(p);
       case 'downloadLive': return download({ ...p, name: C.baseOf(p.name || p.id) + '.' + C.extOf(p.files.live), files: { original: p.files.live } });
       case 'cover': edit({ op: 'setCover', album: S.album, photo: p.id }); return toast(t('info.coverSet'));
+      case 'mainCover': edit({ op: 'setCover', photo: p.id }); return toast(t('cover.mainSet'));
+      case 'replace': return pickReplacement(p);
       case 'delete': {
         const id = p.id;
         deletePhotos([id], () => { if (V.list.length <= 1) closeViewer(); });
@@ -2877,7 +3175,9 @@ function bind() {
     const b = e.target.closest('[data-chip]');
     if (!b) return;
     const f = S.filter, t = b.dataset.chip, v = b.dataset.v;
-    if (t === 'all') { f.kind = ''; f.tag = ''; f.ai = ''; }
+    if (t === 'all') { f.kind = ''; f.tag = ''; f.ai = ''; f.area = null; f.month = ''; }
+    else if (t === 'area') f.area = null;
+    else if (t === 'month') f.month = '';
     else if (t === 'ai') f.ai = f.ai === v ? '' : v;
     else if (t === 'kind') f.kind = f.kind === v ? '' : v;
     else f.tag = f.tag === v ? '' : v;
@@ -2930,6 +3230,8 @@ function bind() {
       case 'expand': { const k = b.dataset.key; S.expanded.has(k) ? S.expanded.delete(k) : S.expanded.add(k); return renderPhotos(); }
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
+      case 'mainCover': return mainCoverSheet();
+      case 'stats': return showStats();
       case 'purge': return purgeSheet();
       case 'downloadAll': return downloadSheet(photos().sort((a, b) => C.sortTs(a) - C.sortTs(b)));
       case 'passphrase': return passphraseSheet();

@@ -11,6 +11,7 @@ import { createMockGitHub } from './mock-github.mjs';
 import { withExif } from './fixtures.mjs';
 import * as oauth from '../server/oauth.js';
 import * as K from '../js/crypto.js';
+import * as C from '../js/core.js';
 
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch { ({ chromium } = await import('/opt/node22/lib/node_modules/playwright/index.mjs')); }
@@ -149,7 +150,9 @@ try {
       const gr = g.createLinearGradient(0, 0, 1600, 1200);
       colors.forEach((col, i) => gr.addColorStop(i / (colors.length - 1), col));
       g.fillStyle = gr; g.fillRect(0, 0, 1600, 1200);
-      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.18})`; g.beginPath(); g.arc(Math.random() * 1600, Math.random() * 1200, 30 + Math.random() * 160, 0, 7); g.fill(); }
+      let seed = [...label].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0; // same picture every run
+      const rnd = () => { seed = (seed + 0x6d2b79f5) >>> 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${rnd() * 0.18})`; g.beginPath(); g.arc(rnd() * 1600, rnd() * 1200, 30 + rnd() * 160, 0, 7); g.fill(); }
       g.fillStyle = 'rgba(0,0,0,.35)'; g.font = '600 120px sans-serif'; g.textAlign = 'center'; g.fillText(label, 800, 640);
       const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
       const buf = new Uint8Array(await blob.arrayBuffer());
@@ -767,6 +770,113 @@ try {
   await until(() => !Object.values(readIndex().photos).some(p => p.ai), 60000);
   const leftover = await A.evaluate(async () => ({ db: (await indexedDB.databases()).some(d => d.name === 'moa-ai'), cache: await caches.has('transformers-cache') }));
   ok(!leftover.db && !leftover.cache && !(await A.isChecked('[data-ai-toggle]')), `turning it off removes the auto tags, the model and the analysis data (${JSON.stringify(leftover)})`);
+
+  // ---------- quick marks · map area · covers · stats · replace ----------
+  const byName = n => Object.values(readIndex().photos).find(p => p.name === n);
+  const settle = async () => { await A.evaluate(() => window.__moa.flush()); await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 150000 }); };
+  await A.click('[data-tab=photos]');
+  await A.click('[data-view=date]');
+  const shib = byName('IMG_0004.JPG');
+  await A.click(`#content .tile[data-id="${shib.id}"]`);
+  await A.waitForSelector('#viewer:not([hidden])');
+  await A.click('[data-v=info]');
+  await A.click('#vInfo [data-mark="⭐"]');
+  await A.waitForSelector('#vInfo [data-mark="⭐"].on');
+  await A.fill('#iTag', '여행');
+  const sug = await A.waitForSelector('#iTagSug [data-sug="✈️"]', { timeout: 5000 }).then(() => true, () => false);
+  ok(sug, 'typing a word ("여행") suggests its mark (✈️)');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/21-marks.png` });
+  if (sug) await A.click('#iTagSug [data-sug="✈️"]');
+  await A.waitForSelector('#vInfo [data-mark="✈️"].on');
+  await A.click('[data-i=mainCover]');
+  await A.click('[data-v=info]');
+  await A.click('[data-v=close]');
+  await settle();
+  ok(JSON.stringify(byName('IMG_0004.JPG').tags.filter(x => ['⭐', '✈️'].includes(x)).sort()) === JSON.stringify(['⭐', '✈️'].sort()), 'quick marks save as tags in one tap');
+  ok(readIndex().cover === shib.id, 'main photo chosen from the viewer');
+  ok((await A.textContent(`#content .tile[data-id="${shib.id}"] .marks`)).includes('⭐'), 'marks show on the photo tile, like the ♥');
+  await A.click('#chips .chip.mark:has-text("⭐")');
+  ok(JSON.stringify(await tileNames()) === '["IMG_0004.JPG"]', 'a mark chip filters the library like a favourite');
+  await A.click('#chips [data-chip=all]');
+
+  // map: tap a cluster → only the photos taken there
+  await A.click('[data-view=map]');
+  await A.waitForSelector('#mapArea');
+  const gpsCount = Object.values(readIndex().photos).filter(p => p.gps).length;
+  ok((await A.textContent('#mapArea')).includes(`${gpsCount} photo`), `map offers "photos in this area" (${await A.textContent('#mapArea')})`);
+  // Jeju and Seoul share one pin when zoomed out to Korea (pins group by grid cell)
+  const jeju = Object.values(readIndex().photos).filter(p => p.gps && p.gps.lat > 33 && p.gps.lat < 38.5 && p.gps.lng > 124 && p.gps.lng < 130).map(p => p.name).sort();
+  for (const z of [4, 3]) {
+    await A.evaluate(z => window.__moa.S.map.setView([34.5, 128.5], z, { animate: false }), z);
+    if (await A.waitForFunction(n => [...document.querySelectorAll('.pin .cnt')].some(c => +c.textContent === n), jeju.length, { timeout: 1500 }).then(() => true, () => false)) break;
+  }
+  const pins = A.locator('.leaflet-marker-icon:has(.cnt)'); // pins overlap at this zoom; tap each group in turn
+  let hit = false;
+  for (let i = 0; i < await pins.count() && !hit; i++) {
+    await pins.nth(i).dispatchEvent('click');
+    hit = await A.waitForSelector('#clOnly', { timeout: 1500 }).then(() => true, () => false);
+    if (hit && JSON.stringify(await A.$$eval('#sheet .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name).sort())) !== JSON.stringify(jeju)) { hit = false; await A.click('#scrim', { position: { x: 10, y: 10 } }); await A.waitForTimeout(300); }
+  }
+  if (!hit) console.log('MAP DEBUG', JSON.stringify({ jeju, pins: await pins.count(), cnt: await A.$$eval('.pin .cnt', c => c.map(x => x.textContent)), zoom: await A.evaluate(() => window.__moa.S.map?.getZoom()), sheet: await A.$$eval('#sheet .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name)), open: await A.evaluate(() => document.querySelector('#scrim').className) }));
+  ok(hit, 'tapping a group of pins opens its photos with "Show only these"');
+  if (SHOTS && hit) await A.screenshot({ path: `${SHOTS}/22-map-area.png` });
+  if (hit) {
+    await A.click('#clOnly');
+    await A.waitForSelector('#chips .chip.scope');
+    const inArea = await tileNames();
+    ok(JSON.stringify(inArea) === JSON.stringify(jeju), `only the photos taken there are shown (${inArea})`);
+    await A.click('#chips .chip.scope');
+    ok(!(await A.isVisible('#chips .chip.scope')) && (await tileNames()).length === Object.keys(readIndex().photos).length, 'removing the place chip shows everything again');
+  }
+
+  // stats: photos per month; a bar opens that month
+  await A.click('[data-tab=settings]');
+  await A.click('#tab-settings [data-act=stats]');
+  await A.waitForSelector('.vbar[data-month="2024-05"]');
+  const may = Object.values(readIndex().photos).filter(p => (p.takenAt || '').startsWith('2024-05')).length;
+  ok((await A.getAttribute('.vbar[data-month="2024-05"]', 'aria-label')).includes(`${may} photo`), `stats: photos per month (May 2024: ${may})`);
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/23-stats.png` }); }
+  await A.click('.vbar[data-month="2024-05"]');
+  await A.waitForSelector('#chips .chip.scope');
+  ok((await tileNames()).length === may, 'tapping a month shows just its photos');
+  await A.click('#chips .chip.scope');
+
+  // album cover picker
+  await A.click('[data-tab=albums]');
+  await A.click('[data-album]');
+  await A.click('[data-act=albumMenu]');
+  await A.click('#albumCover');
+  const pick2 = await A.getAttribute('.pick-grid .tile:not(.current)', 'data-id');
+  await A.click(`.pick-grid .tile[data-id="${pick2}"]`);
+  await settle();
+  ok(Object.values(readIndex().albums).some(a => a.cover === pick2), 'album cover picked from its photos');
+  await A.click('[data-act=backAlbums]');
+
+  // replace IMG_0004 with another file: marks, cover, date and place stay; the old files go
+  await A.click('[data-tab=photos]');
+  await A.click(`#content .tile[data-id="${shib.id}"]`);
+  await A.click('[data-v=info]');
+  const [chooser] = await Promise.all([A.waitForEvent('filechooser'), A.click('[data-i=replace]')]);
+  await chooser.setFiles([files[1]]);
+  await A.waitForSelector('#rpGo');
+  ok(!(await A.isChecked('#rpMeta')) && !(await A.isChecked('#rpPurge')), 'replace keeps the date and place unless asked; history erase off by default');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/24-replace.png` });
+  const oldShib = byName('IMG_0004.JPG');
+  await A.click('#rpGo');
+  await until(() => readIndex().photos[shib.id]?.name === 'IMG_0002.JPG', 150000);
+  const rep = readIndex().photos[shib.id];
+  ok(rep.tags.includes('⭐') && rep.takenAt === oldShib.takenAt && rep.gps.lat === oldShib.gps.lat && readIndex().cover === shib.id, 'replaced photo keeps its marks, date, place and main-photo spot');
+  ok(!C.filesOf(oldShib).some(f => RA.paths().includes(f)) && C.filesOf(rep).every(f => RA.paths().includes(f)), 'the old files are removed and the new ones stored');
+  await A.click('[data-v=info]');
+  await A.click('[data-v=close]');
+
+  // home screen shows the main photo
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=home]');
+  ok(await A.waitForSelector('[data-repo="alice/moa-spring-trip"] .album-dot.has-cover img', { timeout: 10000 }).then(() => true, () => false), 'home screen shows each album\'s main photo');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/25-home-cover.png` });
+  await A.click('[data-repo="alice/moa-spring-trip"]');
+  await A.waitForSelector('#content .tile', { timeout: 20000 });
 
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 

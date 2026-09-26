@@ -133,11 +133,47 @@ function bindSheetDrag() {
 }
 
 function setSync(state, arg) {
+  $('.bar .logo')?.classList.toggle('working', state === 'saving' || state === 'purging');
   const el = $('#sync');
   el.hidden = !state;
   el.classList.toggle('err', state === 'error');
   el.classList.toggle('info', state === 'throttle');
   el.textContent = state ? t(`sync.${state}`, { s: arg }) : '';
+}
+
+// header ring: fills with the progress of a long job (uploads, encryption on/off)
+let ringTimer = null;
+function ringProgress(p) {
+  const el = $('.bar .logo');
+  clearTimeout(ringTimer);
+  if (p == null) {
+    el.classList.remove('busy');
+    ringTimer = setTimeout(() => el.style.removeProperty('--p'), 250); // after the fade
+    return;
+  }
+  el.style.setProperty('--p', String(Math.max(0.03, Math.min(1, p))));
+  el.classList.add('busy');
+}
+/** Finish the ring to 100%, let it be seen full for a beat, then fade it. */
+function ringDone() {
+  ringProgress(1);
+  ringTimer = setTimeout(() => ringProgress(null), 450);
+}
+
+// "new since my last visit": when each album was last open on this device
+const SEEN = 'moa.seen';
+function markSeen(id) { const m = load(SEEN, {}); m[id] = Date.now(); save(SEEN, m); }
+/** Ids of albums someone pushed to after I last had them open (30s allowance for clock drift). */
+function freshAlbums(repos) {
+  const m = load(SEEN, {});
+  const fresh = new Set();
+  for (const r of repos) {
+    const id = r.full_name.toLowerCase(), pushed = Date.parse(r.pushed_at || 0) || 0;
+    if (!(id in m)) m[id] = pushed; // first sighting is the baseline, not "new"
+    else if (pushed > m[id] + 30000) fresh.add(id);
+  }
+  save(SEEN, m);
+  return fresh;
 }
 
 const fmtDur = s => { const t = Math.max(0, Math.floor(s || 0)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
@@ -438,8 +474,13 @@ async function showHome({ join } = {}) {
     if (!inviteFor(join)) $('#homeJoin').innerHTML = `<div class="invite-banner">${t('home.noInviteYet', { repo: `<b>${esc(join.owner)}/${esc(join.repo)}</b>`, me: `<b>@${esc(a.login)}</b>` })}</div>`;
   }
   $('#homeInvites').innerHTML = invites.length ? `<h2 class="section-title" style="margin:0 0 10px">${t('home.invites')}</h2><div class="panel">${invites.map(i => `<div class="row"><img class="avatar" alt="" src="${esc(i.inviter?.avatar_url || avatar(i.inviter?.login || 'ghost'))}"><div class="grow"><b>${esc(albumTitle(i.repository))}</b><small>@${esc(i.inviter?.login || '')} · ${esc(i.repository.full_name)}</small></div><button class="btn btn-primary btn-sm" data-accept="${i.id}">${t('home.accept')}</button></div>`).join('')}</div>` : '';
+  const fresh = freshAlbums(albums);
+  let nth = 0;
   const rows = [
-    ...albums.map(r => `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot${isEncryptedRepo(r) ? ' locked' : ''}" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}">${isEncryptedRepo(r) ? ICON.lock : ''}</span><span class="grow"><b>${esc(albumTitle(r))}</b><small>${esc(r.full_name)}${isEncryptedRepo(r) ? ` · ${t('enc.on')}` : ''}${r.private ? '' : ` · ⚠️ ${t('home.public')}`}</small></span><span class="val">›</span></button>`),
+    ...albums.map(r => {
+      const isNew = fresh.has(r.full_name.toLowerCase());
+      return `<button class="row row-btn" data-repo="${esc(r.full_name)}"><span class="album-dot${isEncryptedRepo(r) ? ' locked' : ''}${isNew ? ' fresh' : ''}" style="background:${MOSAIC[[...r.name].reduce((h, c) => h + c.charCodeAt(0), 0) % MOSAIC.length]}${isNew ? `;--i:${nth++}` : ''}">${isEncryptedRepo(r) ? ICON.lock : ''}</span><span class="grow"><b>${esc(albumTitle(r))}</b><small>${esc(r.full_name)}${isEncryptedRepo(r) ? ` · ${t('enc.on')}` : ''}${r.private ? '' : ` · ⚠️ ${t('home.public')}`}</small></span>${isNew ? `<span class="fresh-tag">${t('home.fresh')}</span>` : ''}<span class="val">›</span></button>`;
+    }),
     ...tokenSpaces.map(x => `<button class="row row-btn" data-space="${esc(x.id)}"><span class="album-dot" style="background:var(--muted)"></span><span class="grow"><b>${esc(x.owner)}/${esc(x.repo)}</b><small>${t('home.viaToken')}</small></span><span class="val">›</span></button>`),
   ];
   $('#homeAlbums').innerHTML = rows.join('') || `<div class="row"><div class="grow"><b>${t('home.empty')}</b></div></div>`;
@@ -618,6 +659,7 @@ function adopt(st) {
   if (gone.length) S.gh.forget(gone).catch(() => {});
   S.head = st.head;
   S.base = st;
+  markSeen(S.space.id);
   S.index = C.applyOps(structuredClone(st.index), S.pending);
   $('#spaceName').textContent = S.index.title || S.space.repo;
   if (S.gh.sealed && S.index.title && S.space.title !== S.index.title) { S.space.title = S.index.title; saveSpaces(); }
@@ -1603,6 +1645,7 @@ const isOwner = () => !!S.repoInfo?.permissions?.admin;
 function convertProgress(toSealed) {
   const label = t(toSealed ? 'conv.encrypting' : 'conv.decrypting');
   setSync('converting', `${label} ${CONV.done}/${CONV.total}`);
+  ringProgress(CONV.total ? CONV.done / CONV.total : 0);
   const sh = $('#sheet');
   if (sh.dataset.kind !== 'convert') return;
   $('#cvCount', sh).textContent = `${CONV.done}/${CONV.total}`;
@@ -1668,6 +1711,7 @@ async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
     gh.setDescription(description).then(() => { if (S.repoInfo) S.repoInfo.description = description; }).catch(() => {});
     CONV.running = false;
     setSync(null);
+    ringDone();
     toast(t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
     if (toSealed) recoverySheet(job.recovery); else closeSheet();
     // encrypting only helps once the plain copies are gone from history too
@@ -1676,6 +1720,7 @@ async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
   } catch (e) {
     console.error(e);
     CONV.running = false;
+    ringProgress(null);
     setSync('error');
     if ($('#sheet').dataset.kind === 'convert') closeSheet();
     toast(t('conv.failed', { e: errMsg(e) }), 5000);
@@ -2350,6 +2395,7 @@ function setEntryStatus(e, k, extra = {}) {
     el.insertAdjacentHTML('beforeend', statusHTML(e));
   }
   const bar = $('#upBar'); if (bar) bar.style.transform = `scaleX(${(U.done + U.failed) / U.total})`;
+  if (U.running) ringProgress((U.done + U.failed + (k === 'uploading' ? (extra.i - 1) / extra.n : 0)) / U.total);
   const cnt = $('#upCount'); if (cnt) cnt.textContent = `${U.done}/${U.total}`;
   updatePill();
 }
@@ -2364,6 +2410,7 @@ function updatePill() {
 async function startUpload(opts) {
   const list = U.entries.filter(e => !e.skip);
   Object.assign(U, { running: true, done: 0, failed: 0, total: list.length });
+  ringProgress(0);
   const sp = S.space;
   let wake = null;
   try { wake = await navigator.wakeLock?.request('screen'); } catch { /* not supported */ }
@@ -2408,6 +2455,7 @@ async function startUpload(opts) {
   }
   await commitBatch();
   U.running = false;
+  ringDone();
   wake?.release?.().catch(() => {});
   updatePill();
   toast(U.failed ? t('up.partial', { n: U.done, f: U.failed }) : t('up.allDone', { n: U.done }), 3500);
@@ -2671,4 +2719,4 @@ bind();
 boot();
 
 // test hook (used by test/e2e.mjs)
-window.__moa = { S, flush, refresh: () => serial(() => refresh()) };
+window.__moa = { S, flush, refresh: () => serial(() => refresh()), showHome };

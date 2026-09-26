@@ -119,8 +119,35 @@ svg { display: block; }
 .space-btn #spaceName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 52vw; }
 .space-btn svg { color: var(--muted); flex: none; }
 /* the app icon itself (icons/icon.svg), so the header mark matches the home-screen icon */
-.logo { width: 28px; height: 28px; border-radius: 6.2px; flex: none; background: url("../icons/icon.svg") center / 100% no-repeat; }
+.logo { position: relative; width: 28px; height: 28px; border-radius: 6.2px; flex: none; background: url("../icons/icon.svg") center / 100% no-repeat; transition: --p 400ms linear; }
 @media (prefers-color-scheme: dark) { .logo { box-shadow: 0 0 0 .5px rgba(255, 255, 255, .16); } }
+.space-btn { gap: 10px; }
+
+/* ---------------- rainbow ring ----------------
+   One ring, two jobs: progress around the header icon while uploading or
+   converting (fills with --p, colors keep turning), and "something new"
+   around an album in the home list (sweeps in once, then drifts slowly).
+   --p (0…1) is how much of the ring shows; --spin turns the colors.
+   The mask keeps only a 2.5px band 2px outside the element, cut to --p. */
+@property --p { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.logo::before, .album-dot.fresh::before {
+  content: ""; position: absolute; inset: -4.5px; padding: 2.5px; border-radius: 10px; pointer-events: none;
+  background: conic-gradient(from var(--spin), #ff9f0a, #ff375f, #bf5af2, #0a84ff, #30d158, #ffd60a, #ff9f0a);
+  -webkit-mask: conic-gradient(#000 calc(var(--p) * 1turn), #0000 0), linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: source-in, xor;
+  mask: conic-gradient(#000 calc(var(--p) * 1turn), #0000 0), linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: intersect, exclude;
+}
+.logo::before { opacity: 0; transform: scale(.92); transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+.logo.working { --p: 1; } /* uploads set --p inline, which wins */
+.logo.busy::before, .logo.working::before { opacity: 1; transform: none; animation: ring-spin 2.4s linear infinite; }
+/* quick saves: show nothing unless it takes a moment */
+.logo.working:not(.busy)::before { transition-delay: 600ms; }
+.album-dot.fresh::before { inset: -5px; border-radius: 14px; animation: ring-fill 600ms var(--ease-out) calc(var(--i, 0) * 60ms) both, ring-spin 8s linear infinite; }
+@keyframes ring-spin { to { --spin: 360deg; } }
+@keyframes ring-fill { from { --p: 0; } to { --p: 1; } }
+.fresh-tag { flex: none; font-size: 12px; font-weight: 700; color: #fff; background: #ff375f; border-radius: 999px; padding: 2px 8px; }
 .bar-actions { display: flex; align-items: center; gap: 2px; }
 #uploadBtn { margin-left: 6px; }
 @media (max-width: 819px) { #uploadBtn { display: none; } }
@@ -496,6 +523,9 @@ details.guide[open] summary::after { transform: rotate(45deg); }
   .scrim.open .sheet { opacity: 1; }
   .welcome .mosaic i { animation: none; opacity: 1; transform: none; }
   .btn:active, .chip:active, .tile:active, .fab:active { transform: none; }
+  /* rings: keep the fill (it carries the progress), stop the turning and the pop */
+  .logo::before, .album-dot.fresh::before { animation: none !important; transform: none; }
+  .album-dot.fresh::before { --p: 1; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .bar, .toolbar, .tabs, .select-bar, .map-note { background: var(--canvas); -webkit-backdrop-filter: none; backdrop-filter: none; }

@@ -477,7 +477,11 @@ try {
   await A.setInputFiles('#fileInput', [files[0], files[5], files[1]]);
   await A.waitForSelector('#upGo');
   await A.click('#upGo');
+  await A.waitForSelector('.bar .logo.busy', { timeout: 5000 });
+  ok(true, 'header ring appears while uploading');
   await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 2, null, { timeout: 60000 });
+  await A.waitForSelector('.bar .logo:not(.busy)', { timeout: 5000 });
+  ok(true, 'header ring clears when the upload finishes');
   const encPaths = RE.paths();
   const stored = encPaths.filter(p => p !== 'album.json' && p !== 'README.md');
   ok(stored.every(p => p === 'album.bin' || /^index\/s\d\d\.bin$/.test(p) || /^data\/[0-9a-f]{2}\/[0-9a-f]{30}$/.test(p)), `only opaque names in the repository (${stored.length} files)`);
@@ -669,6 +673,24 @@ try {
   ok(true, 'revoking deletes the invite');
   await A.click('#scrim', { position: { x: 10, y: 10 } });
   await ctxD.close();
+
+  // home: an album a friend changed since my last visit gets the rainbow ring
+  await A.evaluate(() => window.__moa.showHome());
+  await A.waitForSelector('[data-repo="alice/moa-spring-trip"]');
+  ok(!(await A.isVisible('[data-repo="alice/moa-spring-trip"] .album-dot.fresh')), 'an album I just had open is not marked new');
+  await A.evaluate(() => { const m = JSON.parse(localStorage.getItem('moa.seen')); m['alice/moa-spring-trip'] -= 10 * 60e3; localStorage.setItem('moa.seen', JSON.stringify(m)); });
+  RA.commitJson('album.json', d => { d.title = d.title; }, 'a friend, elsewhere');
+  await A.evaluate(() => window.__moa.showHome());
+  await A.waitForSelector('[data-repo="alice/moa-spring-trip"] .album-dot.fresh');
+  ok((await A.textContent('[data-repo="alice/moa-spring-trip"]')).includes('New'), 'album with activity since my last visit gets the rainbow ring and a "New" tag');
+  if (SHOTS) { await A.waitForTimeout(900); await A.screenshot({ path: `${SHOTS}/18-home-fresh.png` }); }
+  await A.click('[data-repo="alice/moa-spring-trip"]');
+  await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 4, null, { timeout: 20000 });
+  await A.evaluate(() => window.__moa.showHome());
+  await A.waitForSelector('[data-repo="alice/moa-spring-trip"]');
+  ok(!(await A.isVisible('[data-repo="alice/moa-spring-trip"] .album-dot.fresh')), 'opening it clears the ring');
+  await A.click('[data-repo="alice/moa-spring-trip"]');
+  await A.waitForSelector('#content .tile');
 
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 

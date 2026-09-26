@@ -316,7 +316,7 @@ test('i18n: every string has both languages and matching variables', () => {
 
 test('i18n: every t() key used in the app exists', async () => {
   const fs = await import('node:fs');
-  const src = ['app.js', 'media.js', 'github.js', 'crypto.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
+  const src = ['app.js', 'media.js', 'github.js', 'crypto.js', 'ai.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
     + fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   // literal keys only (dynamic ones like t('opt.' + key) are skipped)
   const used = new Set([...src.matchAll(/\bt\('([\w.]*\w)'(?!\s*\+)/g), ...src.matchAll(/data-i18n(?:-aria|-ph)?="([\w.]+)"/g)].map(m => m[1]));
@@ -421,4 +421,39 @@ test('zip: CRC-32 check value, unique names, readable archive layout', async () 
   assert.equal(dv.getUint32(end, true), 0x06054b50);
   assert.equal(dv.getUint16(end + 10, true), 2);
   assert.ok(new TextDecoder().decode(u8).includes('사진 (2).jpg'));
+});
+
+import * as AIL from '../js/ai-labels.js';
+test('ai: tags from similarities — confident labels only, at most three; background wins → none', () => {
+  const dim = AIL.LABELS.length + AIL.BACKGROUND.length;
+  const one = i => { const v = new Float32Array(dim); v[i] = 1; return v; };
+  const labels = AIL.LABELS.map((_, i) => one(i));
+  const bg = AIL.BACKGROUND.map((_, i) => one(AIL.LABELS.length + i));
+  const food = AIL.LABELS.findIndex(l => l.key === 'food'), beach = AIL.LABELS.findIndex(l => l.key === 'beach');
+  assert.deepEqual(AIL.pickTags(one(food), labels, bg), ['food']);
+  const mix = new Float32Array(dim); mix[food] = 0.7; mix[beach] = 0.7;
+  assert.deepEqual(AIL.pickTags(mix, labels, bg).sort(), ['beach', 'food']);
+  assert.deepEqual(AIL.pickTags(one(AIL.LABELS.length), labels, bg), [], 'a plain photo gets no forced label');
+  assert.equal(AIL.labelName('ocean', 'ko'), '바다');
+  assert.equal(AIL.labelName('ocean', 'en'), 'Sea');
+});
+
+test('ai: Korean search words become English for CLIP; unknown Korean falls back to plain search', () => {
+  assert.equal(AIL.toEnglishQuery('dog on the beach'), 'dog on the beach');
+  assert.equal(AIL.toEnglishQuery('바다에서 노을'), 'the ocean a sunset');
+  assert.equal(AIL.toEnglishQuery('강아지 beach'), 'a dog beach');
+  assert.equal(AIL.toEnglishQuery('제주도'), null);
+  assert.equal(AIL.toEnglishQuery('  '), null);
+});
+
+test('ai: auto-tag ops, filter, counts and plain search over tag names', () => {
+  const ix = C.emptyIndex();
+  ix.photos = { a: { id: 'a', kind: 'photo' }, b: { id: 'b', kind: 'photo' } };
+  C.applyOps(ix, [{ op: 'aiTags', id: 'a', tags: ['ocean', 'beach'], v: 1 }, { op: 'aiTags', id: 'b', tags: [], v: 1 }]);
+  assert.deepEqual(ix.photos.a.ai, ['ocean', 'beach']);
+  assert.deepEqual(C.aiTagCounts(Object.values(ix.photos)), [['ocean', 1], ['beach', 1]]);
+  assert.deepEqual(C.filterPhotos(Object.values(ix.photos), { ai: 'ocean' }).map(p => p.id), ['a']);
+  assert.deepEqual(C.filterPhotos(Object.values(ix.photos), { q: '바다' }).map(p => p.id), ['a']);
+  C.applyOp(ix, { op: 'aiClear' });
+  assert.ok(!ix.photos.a.ai && !ix.photos.b.aiv);
 });

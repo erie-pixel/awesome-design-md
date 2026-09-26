@@ -16,6 +16,7 @@
 | **업로드·조회** | 사진·동영상 여러 장을 한 번에 업로드 (데스크톱은 드래그&드롭). 중복 파일은 해시로 걸러내요. 원본 + 2048px 미리보기 + 썸네일을 저장하고, 본 사진은 기기에 캐시돼서 다음엔 바로 떠요. **사진 · 동영상 · LIVE · 좋아요** 칩으로 종류별로 나눠 볼 수 있어요 |
 | **이어 올리기** | 고른 파일을 기기(IndexedDB)에 잠깐 보관했다가 GitHub에 저장된 것부터 지워요. 앱이 꺼지거나 아이폰이 백그라운드에서 멈춰도, 그 앨범을 다시 열면 남은 것부터 자동으로 이어 올려요 |
 | **여러 장 받기** | 선택 → **저장**, 또는 설정 → **전체 받기**. ZIP 하나로 받거나(300MB마다 나눠서), 아이폰에서는 **사진 앱에 저장**(공유 시트, 30개까지)을 고를 수 있어요 |
+| **자동 태그 · 설명으로 검색 (선택)** | 설정에서 동의하고 켜면, 기기 안의 AI(CLIP)가 사진을 보고 음식·바다·노을·강아지 같은 ✨자동 태그를 달고, "바다에서 노을" 같은 말로 사진을 찾을 수 있어요. 사진은 기기 밖으로 나가지 않아요 |
 | **완료 알림** | 업로드·다운로드·암호화 전환이 끝났을 때 Moa를 보고 있지 않으면 시스템 알림을 보내요 (설정에서 끌 수 있어요) |
 | **라이브 포토** | `IMG_1234.HEIC` + `IMG_1234.MOV`를 같이 올리면 자동으로 하나로 묶어요 (Apple 라이브 포토 ID → 파일 이름 → 촬영 시각 순으로 매칭). 사진을 열면 한 번 움직이고, **길게 누르면** 소리와 함께 재생돼요 |
 | **날짜순** | EXIF 촬영 시각 + 시간대(`OffsetTimeOriginal`) 기준으로 월·일별 그룹. 최신순/오래된순 |
@@ -70,6 +71,17 @@
 - **`repo`**는 앨범용 비공개 저장소를 만들고, 친구를 초대하고, 초대를 수락하려면 이 권한이 필요해요. OAuth App에는 "이 저장소만" 같은 더 좁은 권한이 없어서, 이 권한은 **본인의 다른 비공개 저장소에도 접근할 수 있어요.** 로그인 화면에도 그렇게 표시돼요.
 - 그래서 토큰은 브라우저에만 저장하고, 서버는 토큰을 보관하지 않아요. 페이지에는 **외부 스크립트가 하나도 없고**(라이브러리는 모두 저장소에 포함), `vercel.json`의 CSP로 스크립트는 자기 도메인, 네트워크 요청은 GitHub API와 지명 검색으로만 제한해요.
 - **로그아웃**하면 GitHub 쪽 권한도 취소(revoke)되고 이 기기의 사진 캐시도 지워요. GitHub의 *Settings → Applications → Authorized OAuth Apps*에서도 언제든 해제할 수 있어요.
+
+### 자동 태그 · 설명으로 검색 (기기 안 AI, 선택)
+
+설정 → **자동 태그 · 설명으로 검색**을 켜면 동의 화면이 떠요. 동의해야 켜지고, 언제든 끌 수 있어요.
+
+- **동작**: [Transformers.js](https://github.com/huggingface/transformers.js)(Apache-2.0)로 CLIP ViT-B/32(OpenAI, MIT) 모델을 **브라우저 안에서** 돌려요. 모델(약 150MB)은 처음 한 번 Hugging Face에서 받아 기기에 저장해요. 모델만 받고, **사진은 어디에도 보내지 않아요.** 실행기(ONNX Runtime WASM, MIT)는 Moa에 들어 있어요.
+- **자동 태그**: 사람·셀카·아이·강아지·고양이·음식·카페·디저트·해변·바다·산·숲·꽃·노을·야경·도시·눈·명소·자동차·비행·파티·결혼식·공연·운동·예술·스크린샷·문서 중 확실한 것만 최대 3개. 보관함의 ✨칩으로 모아 보고, 사진 정보에서 지울 수 있어요. 태그는 앨범에 저장돼 멤버 모두 보여요(암호화 앨범이면 함께 암호화). **얼굴은 인식하지 않아요.**
+- **설명으로 검색**: 검색창에 "the ocean view", "바다에서 노을"처럼 쓰면 단어가 없어도 비슷한 사진을 찾아요. 모델이 영어만 읽어서 한국어는 자주 쓰는 사진 단어(약 70개)를 영어로 바꿔 찾고, 모르는 단어가 섞이면 일반 검색만 해요.
+- **끄면**: 이 기기의 모델·분석 데이터(사진별 특징값)가 지워져요. **이 앨범의 자동 태그도 지우기**를 켜면 앨범에서도 지워요. 로그아웃해도 지워져요.
+- **보안**: AI는 별도 Web Worker에서만 돌아요. 이 파일에만 WASM 실행과 Hugging Face 접속을 허용하는 보안 정책을 따로 두고(`vercel.json`), GitHub 토큰이 있는 페이지는 기존의 엄격한 정책 그대로예요.
+- **속도**: 휴대폰에서 사진 한 장에 대략 0.3~1초. 켜 둔 동안 앱을 보고 있을 때 조금씩 처리하고, 업로드 중엔 쉬어요.
 
 ### 초대 링크는 어떻게 동작하나요
 
@@ -200,6 +212,7 @@ e2e 테스트는 실제 `/api/auth/*` 함수를 가짜 github.com 로그인 화�
 |---|---|
 | `js/core.js` | DOM 없는 순수 로직: index 형식, 편집 op, 그룹/정렬, EXIF→필드, QuickTime atom 파서, Apple MakerNote(라이브 포토 ID), 라이브 포토 매칭 |
 | `js/github.js` | GitHub REST 클라이언트: 월별 파일 읽기/쓰기, 원자적 커밋 + 충돌 재시도, 분당 6회 저장 조절, 미디어 캐시 |
+| `js/ai.js`, `js/ai-worker.js`, `js/ai-labels.js` | 기기 안 AI: CLIP 워커, 특징값 저장(IndexedDB), 자동 태그 고르기, 설명 검색, 한국어→영어 단어 |
 | `js/queue.js` | 이어 올리기 대기열 (IndexedDB) |
 | `js/zip.js` | 여러 장 받기용 ZIP 만들기 (압축 없이 묶기, UTF-8 이름) |
 | `js/crypto.js` | 앨범 암호화 — 키 생성·감싸기(PBKDF2), 파일 암호화·복호화(AES-GCM), 기기에 키 기억(IndexedDB) |
@@ -209,7 +222,7 @@ e2e 테스트는 실제 `/api/auth/*` 함수를 가짜 github.com 로그인 화�
 | `js/media.js` | 파일 분석(해시·메타데이터), HEIC 디코딩, JPEG 미리보기/썸네일 생성 |
 | `js/geo.js` | Nominatim 역지오코딩·장소 검색 (1초 간격, 캐시) |
 | `js/app.js` | UI: 보관함(날짜·장소·지도·태그), 앨범, 공유·설정, 뷰어, 업로드 |
-| `vendor/` | [exifr](https://github.com/MikeKovarik/exifr) (MIT), [Leaflet](https://leafletjs.com) (BSD-2), [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, 초대 QR) |
+| `vendor/` | [exifr](https://github.com/MikeKovarik/exifr) (MIT), [Leaflet](https://leafletjs.com) (BSD-2), [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, 초대 QR), [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0) + [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) WASM |
 
 글꼴은 [Pretendard Variable](https://github.com/orioncactus/pretendard)(SIL OFL 1.1, `vendor/pretendard/LICENSE.txt`)을 저장소에 포함해 쓰고, 필요한 글자 조각만 내려받아요. 움직임과 손맛은 [Emil Kowalski의 디자인 엔지니어링 원칙](https://github.com/emilkowalski/skill)을 따랐어요.
 
@@ -227,4 +240,4 @@ Apple, iPhone, Live Photos는 Apple Inc.의 상표이고, GitHub은 GitHub, Inc.
 | 개인정보 보호법 | 개인정보 처리방침, 해외 이전(GitHub·Vercel·지오코더) 고지, 보호책임자 | 약관·처리방침 작성 |
 | 위치정보법 | 사진 GPS를 처리하는 게 개인위치정보에 해당하면 위치기반서비스사업 신고(소상공인은 시작 후 1개월 내)와 위치 약관·동의가 필요할 수 있어요 | 변호사 확인 |
 | 이름 "Moa" | 흔한 단어라 겹치는 상표가 있을 수 있어요 | KIPRIS 상표 검색 |
-| 라이선스 | exifr(MIT)·Leaflet(BSD-2)·qrcode-generator(MIT)·Pretendard(OFL)는 상업 이용 가능, 고지만 유지 | 없음 (글꼴 단독 판매, 수정본에 "Pretendard" 이름 사용만 금지) |
+| 라이선스 | exifr(MIT)·Leaflet(BSD-2)·qrcode-generator(MIT)·Transformers.js(Apache-2.0)·ONNX Runtime(MIT)·CLIP 가중치(MIT)·Pretendard(OFL)는 상업 이용 가능, 고지만 유지 | 없음 (글꼴 단독 판매, 수정본에 "Pretendard" 이름 사용만 금지) |

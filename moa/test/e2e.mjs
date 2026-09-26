@@ -27,11 +27,13 @@ const APP = `http://localhost:${APP_PORT}/index.html`;
 // ---------- servers ----------
 const { server: apiServer, api } = createMockGitHub({ users: { 'tok-alice': 'alice', 'tok-bob': 'bob', 'tok-dave': 'dave' } });
 await new Promise(r => apiServer.listen(API_PORT, r));
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 
 // Same CSP as production (vercel.json), with the mock API origin allowed.
 const CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers[0].headers.find(h => h.key === 'Content-Security-Policy').value
   .replace("connect-src 'self'", `connect-src 'self' ${API} http://localhost:${API_PORT + 1}`);
+// the AI worker gets its own, looser policy (WASM, Hugging Face) — exactly as vercel.json serves it
+const WORKER_CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers.find(h => h.source === '/js/ai-worker.js').headers.find(h => h.key === 'Content-Security-Policy').value;
 
 // The real /api/auth/* handlers, pointed at a fake github.com served below.
 const APP_ORIGIN = `http://localhost:${APP_PORT}`;
@@ -82,7 +84,7 @@ const appServer = http.createServer(async (req, res) => {
   }
   const p = path.join(ROOT, decodeURIComponent(u.pathname === '/' ? '/index.html' : u.pathname));
   if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Content-Security-Policy': CSP });
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Content-Security-Policy': u.pathname === '/js/ai-worker.js' ? WORKER_CSP : CSP });
   fs.createReadStream(p).pipe(res);
 });
 await new Promise(r => appServer.listen(APP_PORT, r));
@@ -715,6 +717,56 @@ try {
   fs.unlinkSync(zipPath);
   ok(zipOk, `selected photos download as one ZIP (${zipInfo.names.join(', ')})`);
   await A.click('#selectBtn');
+
+  // ---------- on-device AI: consent → auto tags → search by description → off ----------
+  // Hugging Face is answered by test/fake-clip, a stand-in model (colour → meaning) that runs through
+  // the real Transformers.js + ONNX Runtime WASM in the real worker, under the worker's own CSP.
+  await ctxA.route(/huggingface\.co\/Xenova\/clip-vit-base-patch32\/resolve\/main\//, r => {
+    const f = path.join(ROOT, 'test/fake-clip', r.request().url().split('/resolve/main/')[1]);
+    return r.fulfill(fs.existsSync(f) ? { status: 200, body: fs.readFileSync(f), headers: { 'Access-Control-Allow-Origin': '*' } } : { status: 404, body: '', headers: { 'Access-Control-Allow-Origin': '*' } });
+  });
+  await A.click('[data-tab=settings]');
+  await A.click('[data-ai-toggle] + span');
+  await A.waitForSelector('#aiAgree');
+  ok(!(await A.isChecked('[data-ai-toggle]')), 'smart tags stay off until the consent sheet is accepted');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/19-ai-consent.png` }); }
+  await A.click('#aiAgree');
+  const aiOf = name => Object.values(readIndex().photos).find(p => p.name === name)?.ai;
+  await until(() => aiOf('IMG_0004.JPG')?.includes('ocean') && JSON.stringify(aiOf('IMG_0001.JPG')) === '["sunset"]', 120000).catch(async e => {
+    console.log('AI DEBUG', JSON.stringify({
+      status: await A.$eval('#aiStatus', x => x.textContent).catch(() => null),
+      local: await A.evaluate(() => Object.values(window.__moa.S.index.photos).map(p => [p.name, p.ai, p.aiv])),
+      repo: Object.values(readIndex().photos).map(p => [p.name, p.ai]),
+    }));
+    throw e;
+  });
+  ok(await A.isChecked('[data-ai-toggle]'), 'photos analysed on the device; auto tags saved to the album');
+  await A.click('[data-tab=photos]');
+  await A.click('.chip.ai:has-text("Sea")');
+  const tileNames = () => A.$$eval('#content .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name).sort());
+  ok(JSON.stringify(await tileNames()) === '["IMG_0004.JPG","IMG_0005.JPG"]', `auto-tag chip filters the library (${await tileNames()})`);
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/20-ai-chip.png` });
+  await A.click('.chip.ai:has-text("Sea")');
+  await A.click('#searchBtn');
+  // neither query matches any photo by plain text, so only the AI can bring these back
+  const seaOnly = () => A.waitForFunction(() => {
+    const n = [...document.querySelectorAll('#content .tile')].map(x => window.__moa.S.index.photos[x.dataset.id].name);
+    return n.includes('IMG_0004.JPG') && n.includes('IMG_0005.JPG') && !n.includes('IMG_0003.JPG');
+  }, null, { timeout: 15000 }).then(() => true, () => false);
+  await A.fill('#searchInput', 'the ocean view');
+  ok(await seaOnly(), `search by description finds what the words alone don't (${await tileNames()})`);
+  await A.fill('#searchInput', 'zzz');
+  await A.waitForSelector('#content .empty');
+  await A.fill('#searchInput', '파란 바다');
+  ok(await seaOnly(), `Korean search words work too (${await tileNames()})`);
+  await A.click('#searchBtn');
+  await A.click('[data-tab=settings]');
+  await A.click('[data-ai-toggle] + span');
+  await A.click('#aiClear + span');
+  await A.click('#aiOff');
+  await until(() => !Object.values(readIndex().photos).some(p => p.ai), 60000);
+  const leftover = await A.evaluate(async () => ({ db: (await indexedDB.databases()).some(d => d.name === 'moa-ai'), cache: await caches.has('transformers-cache') }));
+  ok(!leftover.db && !leftover.cache && !(await A.isChecked('[data-ai-toggle]')), `turning it off removes the auto tags, the model and the analysis data (${JSON.stringify(leftover)})`);
 
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 

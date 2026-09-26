@@ -147,6 +147,9 @@ svg { display: block; }
 .album-dot.fresh::before { inset: -5px; border-radius: 14px; animation: ring-fill 600ms var(--ease-out) calc(var(--i, 0) * 60ms) both, ring-spin 8s linear infinite; }
 @keyframes ring-spin { to { --spin: 360deg; } }
 @keyframes ring-fill { from { --p: 0; } to { --p: 1; } }
+.chip.ai svg { width: 13px; height: 13px; margin-right: 4px; vertical-align: -1px; color: #bf5af2; }
+.consent { margin: 0 4px 18px; padding-left: 18px; color: var(--ink-2); font-size: 15px; line-height: 1.5; }
+.consent li + li { margin-top: 8px; }
 .fresh-tag { flex: none; font-size: 12px; font-weight: 700; color: #fff; background: #ff375f; border-radius: 999px; padding: 2px 8px; }
 .bar-actions { display: flex; align-items: center; gap: 2px; }
 #uploadBtn { margin-left: 6px; }

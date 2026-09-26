@@ -1,7 +1,7 @@
 /* Moa service worker — app shell offline cache.
    Photos are cached by the app itself (Cache Storage "moa-media-v1");
    GitHub API calls are never intercepted here. */
-const CACHE = 'moa-shell-v9';
+const CACHE = 'moa-shell-v10';
 const ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,8 @@ const ASSETS = [
   './js/crypto.js',
   './js/queue.js',
   './js/zip.js',
+  './js/ai.js',
+  './js/ai-labels.js',
   './js/media.js',
   './js/geo.js',
   './js/limits.js',
@@ -46,6 +48,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  if (url.pathname.includes('/vendor/transformers/') || url.pathname.endsWith('/ai-worker.js')) return; // AI files: only when turned on, straight from the network/HTTP cache
 
   if (e.request.mode === 'navigate') {
     e.respondWith(

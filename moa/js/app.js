@@ -14,6 +14,8 @@ import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
 import * as Q from './queue.js';
 import { ZipWriter } from './zip.js';
+import * as AI from './ai.js';
+import { AI_VERSION, labelName, toEnglishQuery } from './ai-labels.js';
 import { t, setLang, lang, locale, fmtDay, fmtMonth, fmtTime } from './i18n.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -28,6 +30,7 @@ const ICON = {
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7zM19 15c.25 2 1 2.75 3 3-2 .25-2.75 1-3 3-.25-2-1-2.75-3-3 2-.25 2.75-1 3-3z"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
 };
 
@@ -37,7 +40,7 @@ const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', a
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
-const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true, notify: true, lang: 'en' }, load(LS.prefs, {}));
+const prefs = Object.assign({ autoplayLive: true, keepOriginal: true, geocode: true, notify: true, ai: false, lang: 'en' }, load(LS.prefs, {}));
 setLang(prefs.lang);
 
 const S = {
@@ -383,6 +386,7 @@ async function logout() {
   S.keys.clear();
   localStorage.removeItem(LS.invite);
   Q.clearAll();
+  AI.wipe().catch(() => {});
   await Promise.all([clearMediaCache().catch(() => {}), forgetAllKeys()]);
   urls.clear(); resolved.clear();
   signedOut(t('auth.signedOut'));
@@ -604,6 +608,8 @@ async function openSpace(sp, { initTitle, initPass } = {}) {
   S.pending = load(LS.pending(sp.id), []);
   Object.assign(S, { index: null, head: null, base: null, album: null, me: null, tab: 'photos' });
   S.filter = { kind: '', tag: '', q: '' };
+  S.semantic = null;
+  AIS.emb = null;
   S.selected.clear();
   setSelecting(false);
   $('#welcome').hidden = true;
@@ -625,6 +631,7 @@ async function openSpace(sp, { initTitle, initPass } = {}) {
     setSync(S.pending.length ? 'pending' : null);
     if (S.pending.length) scheduleFlush(500);
     resumeUploads();
+    if (prefs.ai) aiStart();
   } catch (e) {
     if (S.space !== sp) return;
     setSync('error');
@@ -674,6 +681,7 @@ async function refresh(first = false) {
   if (st.root && headMoved) S.gh.pruneCache(keepSet(st)).catch(() => {});
   if (first && S.canWrite && S.me?.login && !S.index.members[S.me.login]) edit({ op: 'join', user: S.me.login, at: new Date().toISOString() });
   runGeocodeJob();
+  scheduleAi();
 }
 
 /** Take a fetched/committed album state { head, index, files } as the new base. */
@@ -915,7 +923,14 @@ function uploadPlanHTML(E, keepOriginal) {
 // ---------------- photos tab ----------------
 
 function currentList() {
-  return C.filterPhotos(photos(), { album: S.album, tag: S.filter.tag, kind: S.filter.kind, q: S.filter.q });
+  const f = { album: S.album, tag: S.filter.tag, kind: S.filter.kind, ai: S.filter.ai };
+  const list = C.filterPhotos(photos(), { ...f, q: S.filter.q });
+  // search by description (on-device AI): add what it found that the words alone didn't
+  const sem = S.semantic;
+  if (!S.filter.q || !sem || sem.q !== S.filter.q) return list;
+  const have = new Set(list.map(p => p.id));
+  const extra = C.filterPhotos(sem.ids.map(id => S.index.photos[id]).filter(Boolean), f).filter(p => !have.has(p.id));
+  return [...list, ...extra];
 }
 
 function renderPhotos() {
@@ -1027,12 +1042,13 @@ function renderToolbar(all) {
   const favs = all.filter(p => p.likes?.length).length;
   const tags = C.tagCounts(all).slice(0, 40);
   $('#chips').innerHTML = [
-    `<button class="chip${!f.kind && !f.tag ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
+    `<button class="chip${!f.kind && !f.tag && !f.ai ? ' on' : ''}" data-chip="all">${t('chip.all')}</button>`,
     videos ? `<button class="chip${f.kind === 'photo' ? ' on' : ''}" data-chip="kind" data-v="photo">${t('chip.photos')} <span class="n">${all.length - videos}</span></button>` : '',
     lives ? `<button class="chip${f.kind === 'live' ? ' on' : ''}" data-chip="kind" data-v="live">${ICON.live}LIVE <span class="n">${lives}</span></button>` : '',
     videos ? `<button class="chip${f.kind === 'video' ? ' on' : ''}" data-chip="kind" data-v="video">${t('chip.videos')} <span class="n">${videos}</span></button>` : '',
     favs ? `<button class="chip${f.kind === 'fav' ? ' on' : ''}" data-chip="kind" data-v="fav">♥ ${t('chip.liked')} <span class="n">${favs}</span></button>` : '',
     ...tags.map(([tg, n]) => `<button class="chip${f.tag === tg ? ' on' : ''}" data-chip="tag" data-v="${esc(tg)}">#${esc(tg)} <span class="n">${n}</span></button>`),
+    ...C.aiTagCounts(all).slice(0, 20).map(([k, n]) => `<button class="chip ai${f.ai === k ? ' on' : ''}" data-chip="ai" data-v="${esc(k)}">${ICON.spark}${esc(labelName(k, lang()))} <span class="n">${n}</span></button>`),
   ].join('');
 }
 
@@ -1208,6 +1224,7 @@ function renderSettings() {
       ${sw('keepOriginal')}
       ${sw('geocode')}
       ${canNotify() ? sw('notify') : ''}
+      <div class="row"><div class="grow"><b>${t('ai.opt')}</b><small id="aiStatus">${aiStatusText()}</small></div><label class="switch"><input type="checkbox" data-ai-toggle${prefs.ai ? ' checked' : ''}><span></span></label></div>
       <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>${t('set.clearCache')}</b></span></button>
     </div>
     <h2 class="section-title">${t('set.account')}</h2>
@@ -2210,6 +2227,7 @@ function renderInfo() {
   const w = S.canWrite;
   box.innerHTML = `<div class="grab"></div>
     ${w ? `<textarea id="iCap" rows="1" placeholder="${t('info.caption')}" maxlength="500">${esc(p.caption || '')}</textarea>` : p.caption ? `<div class="kv">${esc(p.caption)}</div>` : ''}
+    ${p.ai?.length ? `<h4>${t('ai.tags')}</h4><div class="tagrow">${p.ai.map(k => `<span class="chip ai">${ICON.spark}${esc(labelName(k, lang()))}${w ? `<button data-i="unai" data-t="${esc(k)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
     <h4>${t('info.tags')}</h4>
     ${p.tags?.length ? `<div class="tagrow">${p.tags.map(tg => `<span class="chip">#${esc(tg)}${w ? `<button data-i="untag" data-t="${esc(tg)}" aria-label="${t('info.untag')}">✕</button>` : ''}</span>`).join('')}</div>` : ''}
     ${w ? `<input type="text" id="iTag" placeholder="${t('info.addTag')}" enterkeyhint="done" autocomplete="off">
@@ -2266,6 +2284,7 @@ function renderInfo() {
     if (!b || b.tagName === 'INPUT' && b.type !== 'checkbox') return;
     switch (b.dataset.i) {
       case 'untag': return edit({ op: 'tag', ids: [p.id], tag: b.dataset.t, on: false });
+      case 'unai': return edit({ op: 'aiTags', id: p.id, tags: (p.ai || []).filter(k => k !== b.dataset.t), v: p.aiv || AI_VERSION });
       case 'tag': return edit({ op: 'tag', ids: [p.id], tag: b.dataset.t, on: true });
       case 'alb': return edit({ op: 'albumMembership', ids: [p.id], album: b.dataset.a, on: b.checked });
       case 'newAlbum': return newAlbum(id => edit({ op: 'albumMembership', ids: [p.id], album: id, on: true }));
@@ -2502,6 +2521,7 @@ async function startUpload(opts, { resumed = false } = {}) {
   else if ($('#sheet').dataset.kind !== 'upload') cleanupUpload();
   S.gh.info().then(i => { if (S.space === sp) { S.repoInfo = i; rerender(); } }).catch(() => {});
   runGeocodeJob();
+  scheduleAi();
 }
 
 // ---------------- downloading many photos: ZIP, or straight into Photos via the share sheet ----------------
@@ -2662,6 +2682,131 @@ async function preparePhoto(e, opts) {
   return { photo, files: blobs, bytes };
 }
 
+// ---------------- on-device AI: auto tags and search by description (opt-in) ----------------
+// Off until the person agrees. The CLIP model comes from Hugging Face once; photos are
+// looked at on this device only. Embeddings stay on the device; auto tags go into the
+// album (so every member sees them) and are encrypted with it when it is encrypted.
+
+const AIS = { status: 'off', loaded: 0, total: 0, done: 0, todo: 0, emb: null, running: false, error: '' };
+
+function aiStatusText() {
+  if (!prefs.ai) return t('ai.offNote');
+  if (AIS.status === 'loading') return AIS.total ? t('ai.downloading', { p: Math.round((AIS.loaded / AIS.total) * 100) }) : t('ai.starting');
+  if (AIS.status === 'error') return t('ai.failed', { e: AIS.error });
+  if (AIS.running && AIS.todo) return t('ai.analyzing', { n: AIS.done, total: AIS.todo });
+  return t('ai.ready');
+}
+function aiStatusUpdate() { const el = $('#aiStatus'); if (el) el.textContent = aiStatusText(); }
+
+function aiConsentSheet() {
+  const sh = openSheet(`<h2>${t('ai.consentTitle')}</h2>
+    <ul class="consent">
+      <li>${t('ai.c1')}</li><li>${t('ai.c2')}</li><li>${t('ai.c3')}</li><li>${t('ai.c4')}</li>
+    </ul>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="aiAgree">${t('ai.agree')}</button></div>`);
+  $('#aiAgree', sh).onclick = () => {
+    prefs.ai = true;
+    prefs.aiConsentAt = new Date().toISOString();
+    save(LS.prefs, prefs);
+    closeSheet();
+    render();
+    aiStart();
+  };
+}
+
+function aiOffSheet() {
+  const has = photos().some(p => p.ai?.length);
+  const sh = openSheet(`<h2>${t('ai.offTitle')}</h2><p class="sheet-p">${t('ai.offBody')}</p>
+    ${has && S.canWrite ? `<div class="row opt-row"><div class="grow"><b>${t('ai.clearTags')}</b></div><label class="switch"><input type="checkbox" id="aiClear"><span></span></label></div>` : ''}
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="aiOff">${t('ai.turnOff')}</button></div>`);
+  $('#aiOff', sh).onclick = async () => {
+    const clear = !!$('#aiClear', sh)?.checked;
+    prefs.ai = false;
+    delete prefs.aiConsentAt;
+    save(LS.prefs, prefs);
+    Object.assign(AIS, { status: 'off', emb: null, running: false, done: 0, todo: 0 });
+    S.semantic = null;
+    closeSheet();
+    await AI.wipe().catch(() => {});
+    if (clear) edit({ op: 'aiClear' });
+    render();
+    toast(t('ai.offDone'));
+  };
+}
+
+async function aiStart() {
+  if (!prefs.ai || AIS.status === 'loading' || AIS.status === 'ready') return scheduleAi();
+  Object.assign(AIS, { status: 'loading', loaded: 0, total: 0, error: '' });
+  aiStatusUpdate();
+  try {
+    await AI.start((loaded, total) => { AIS.loaded = loaded; AIS.total = total; aiStatusUpdate(); });
+    if (!prefs.ai) return;
+    AIS.status = 'ready';
+    aiStatusUpdate();
+    scheduleAi(0);
+  } catch (e) {
+    console.error(e);
+    Object.assign(AIS, { status: 'error', error: errMsg(e) });
+    aiStatusUpdate();
+  }
+}
+
+let aiTimer = null;
+function scheduleAi(ms = 1500) {
+  if (!prefs.ai) return;
+  clearTimeout(aiTimer);
+  aiTimer = setTimeout(() => (AIS.status === 'ready' ? runAiJob() : aiStart()), ms);
+}
+
+/** Look at every photo this device hasn't yet; tag the ones the album hasn't tagged. */
+async function runAiJob() {
+  if (!prefs.ai || AIS.status !== 'ready' || AIS.running || !S.index) return;
+  AIS.running = true;
+  const sp = S.space;
+  try {
+    if (!AIS.emb || AIS.emb.space !== sp.id) { AIS.emb = await AI.loadEmbeddings(sp.id); AIS.emb.space = sp.id; }
+    const emb = AIS.emb;
+    const todo = photos().filter(p => p.files?.thumb && (!emb.has(p.id) || (S.canWrite && p.aiv !== AI_VERSION)));
+    Object.assign(AIS, { done: 0, todo: todo.length });
+    aiStatusUpdate();
+    for (const p of todo) {
+      if (!prefs.ai || S.space !== sp || AIS.status !== 'ready') break;
+      while (U.running || CONV.running || document.hidden) { await new Promise(r => setTimeout(r, 2000)); if (S.space !== sp || !prefs.ai) return; }
+      let vec = emb.get(p.id);
+      if (!vec) {
+        try { vec = await AI.embedImage(await S.gh.media(p.files.thumb)); } catch (e) { console.warn('ai', p.id, e); AIS.done++; continue; }
+        emb.set(p.id, vec);
+        AI.saveEmbedding(sp.id, p.id, vec).catch(() => {});
+      }
+      const cur = S.index?.photos[p.id];
+      if (cur && S.canWrite && cur.aiv !== AI_VERSION) edit({ op: 'aiTags', id: p.id, tags: await AI.tagsFor(vec), v: AI_VERSION });
+      AIS.done++;
+      aiStatusUpdate();
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    AIS.running = false;
+    aiStatusUpdate();
+  }
+  if (S.filter.q) semanticSearch(S.filter.q);
+}
+
+/** Search by description: words → English (CLIP's text side) → closest photos. */
+let semSeq = 0;
+async function semanticSearch(q) {
+  const my = ++semSeq;
+  if (!prefs.ai || AIS.status !== 'ready' || !q.trim() || !AIS.emb?.size) { if (S.semantic) { S.semantic = null; renderPhotos(); } return; }
+  const english = toEnglishQuery(q);
+  if (!english) return;
+  try {
+    const ids = await AI.rank(english, AIS.emb);
+    if (my !== semSeq || S.filter.q !== q) return;
+    S.semantic = { q, ids };
+    renderPhotos();
+  } catch (e) { console.warn('semantic search', e); }
+}
+
 // ---------------- place names in the background ----------------
 
 const geoTried = new Set();
@@ -2711,7 +2856,7 @@ function bind() {
     else if (S.filter.q) { S.filter.q = ''; $('#searchInput').value = ''; render(); }
   };
   let qTimer;
-  $('#searchInput').oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.filter.q = e.target.value; renderPhotos(); }, 200); };
+  $('#searchInput').oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.filter.q = e.target.value; renderPhotos(); semanticSearch(S.filter.q); }, 200); };
   $('#upPill').onclick = () => showUploadSheet(false);
 
   $('#tabbar').onclick = e => {
@@ -2732,7 +2877,8 @@ function bind() {
     const b = e.target.closest('[data-chip]');
     if (!b) return;
     const f = S.filter, t = b.dataset.chip, v = b.dataset.v;
-    if (t === 'all') { f.kind = ''; f.tag = ''; }
+    if (t === 'all') { f.kind = ''; f.tag = ''; f.ai = ''; }
+    else if (t === 'ai') f.ai = f.ai === v ? '' : v;
     else if (t === 'kind') f.kind = f.kind === v ? '' : v;
     else f.tag = f.tag === v ? '' : v;
     renderPhotos();
@@ -2813,6 +2959,11 @@ function bind() {
       applyStaticText();
       render();
       return;
+    }
+    if (e.target.matches('[data-ai-toggle]')) {
+      const want = e.target.checked;
+      e.target.checked = prefs.ai; // stays as it was until the sheet is confirmed
+      return want ? aiConsentSheet() : aiOffSheet();
     }
     const k = e.target.dataset.pref;
     if (!k) return;

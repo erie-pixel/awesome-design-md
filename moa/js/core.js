@@ -5,6 +5,8 @@
    and Live Photo pairing. Shared by the app and the Node tests.
    ============================================================ */
 
+import { labelWords } from './ai-labels.js';
+
 export const INDEX_PATH = 'index.json';   // v1: everything in one file (read + migrated)
 export const META_PATH = 'album.json';    // v2: title, members, albums
 export const SHARD_DIR = 'index';         // v2: index/YYYY-MM.json, photos by capture month
@@ -203,6 +205,12 @@ export function applyOp(ix, op) {
       break;
     case 'setTitle':
       ix.title = op.title;
+      break;
+    case 'aiTags': // on-device AI's labels for one photo ([] = looked, found nothing)
+      each([op.id], p => { p.ai = op.tags; p.aiv = op.v; });
+      break;
+    case 'aiClear':
+      Object.values(P).forEach(p => { delete p.ai; delete p.aiv; });
       break;
   }
   return ix;
@@ -504,17 +512,18 @@ export function placeTitle(place, level = 'city') {
 
 export const sortTs = p => p.ts ?? (Date.parse(p.uploadedAt) || 0);
 
-export function filterPhotos(list, { album, tag, kind, q } = {}) {
+export function filterPhotos(list, { album, tag, kind, q, ai } = {}) {
   const query = (q || '').trim().toLowerCase();
   return list.filter(p => {
     if (album && !(p.albums || []).includes(album)) return false;
     if (tag && !(p.tags || []).includes(tag)) return false;
+    if (ai && !(p.ai || []).includes(ai)) return false;
     if (kind === 'live' && !p.files?.live) return false;
     if (kind === 'video' && p.kind !== 'video') return false;
     if (kind === 'photo' && p.kind === 'video') return false;
     if (kind === 'fav' && !(p.likes || []).length) return false;
     if (query) {
-      const hay = [p.name, p.caption, p.by, p.place?.label, p.place?.name, p.place?.country, p.place?.region, ...(p.tags || []), p.camera?.model].filter(Boolean).join(' ').toLowerCase();
+      const hay = [p.name, p.caption, p.by, p.place?.label, p.place?.name, p.place?.country, p.place?.region, ...(p.tags || []), ...(p.ai || []).flatMap(labelWords), p.camera?.model].filter(Boolean).join(' ').toLowerCase();
       if (!query.split(/\s+/).every(w => hay.includes(w.replace(/^#/, '')))) return false;
     }
     return true;
@@ -580,6 +589,13 @@ export function groupByTag(list) {
   none.photos.sort((a, b) => sortTs(b) - sortTs(a));
   if (none.photos.length) groups.push(none);
   return groups;
+}
+
+/** [key, count] for auto tags, most common first. */
+export function aiTagCounts(list) {
+  const m = new Map();
+  for (const p of list) for (const k of p.ai || []) m.set(k, (m.get(k) || 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1]);
 }
 
 export function tagCounts(list) {

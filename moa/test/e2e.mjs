@@ -191,11 +191,14 @@ try {
   ok(!(await A.evaluate(() => location.hash)), 'token removed from the address bar');
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/01b-home-empty.png` });
   await A.click('#newRepoBtn');
+  await A.waitForFunction(() => document.activeElement?.id === 'nrTitle'); // the sheet focuses the title itself
   await A.fill('#nrTitle', '우리들의 봄 여행');
   ok(/^moa-\d{8}$/.test(await A.inputValue('#nrName')), 'Korean album name gets an ASCII repository name');
   await A.fill('#nrName', 'moa-spring-trip');
   await A.click('#nrOk');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'));
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/02a-empty-library.png` }); }
+  ok(await A.isVisible('#content .empty-art'), 'empty library shows the tiles picture');
   RA = api.at('alice/moa-spring-trip');
   ok(RA.repo.private && RA.repo.topics.includes('moa-album'), 'album repository created private and tagged moa-album');
   ok(RA.paths().includes('album.json') && RA.paths().includes('README.md') && !RA.paths().includes('index.json'), 'album initialized with README.md + album.json');
@@ -452,6 +455,7 @@ try {
   await A.click('[data-tab=settings]');
   await A.click('[data-act=home]');
   await A.click('#newRepoBtn');
+  await A.waitForFunction(() => document.activeElement?.id === 'nrTitle'); // the sheet focuses the title itself
   await A.fill('#nrTitle', '비밀 여행');
   await A.click('#encOn + span');
   const encName = await A.inputValue('#nrName');

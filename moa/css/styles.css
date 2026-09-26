@@ -230,6 +230,7 @@ svg { display: block; }
 .place-card .foot { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 12px; font-size: 13px; color: var(--muted); }
 
 .empty { text-align: center; padding: 72px 24px; color: var(--muted); }
+.empty-art { display: block; width: 88px; height: 88px; margin: 0 auto 22px; filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .14)); }
 .empty h2 { color: var(--ink); font: 700 26px/1.2 var(--font-display); letter-spacing: -.02em; margin: 0 0 8px; }
 .empty p { margin: 0 auto 20px; max-width: 420px; font-size: 15px; }
 .drop-hint { outline: 2px dashed var(--primary); outline-offset: -10px; }

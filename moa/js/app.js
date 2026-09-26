@@ -32,6 +32,8 @@ const ICON = {
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7zM19 15c.25 2 1 2.75 3 3-2 .25-2.75 1-3 3-.25-2-1-2.75-3-3 2-.25 2.75-1 3-3z"/></svg>',
   github: '<svg class="faceid" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  gauge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></svg>',
   faceid: '<svg class="faceid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 16a4 4 0 0 0 5 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
 };
@@ -417,7 +419,7 @@ function showWelcome({ join, adding, invite } = {}) {
     <form id="connectForm" autocomplete="off" style="padding:4px 16px 16px">
       <label class="field"><span>${t('welcome.repo')}</span><input name="repo" placeholder="owner/repo" value="${join ? esc(join.owner + '/' + join.repo) : ''}" required autocapitalize="off" spellcheck="false"></label>
       <label class="field"><span>${t('welcome.token')}</span><input name="token" type="password" placeholder="github_pat_…" required autocapitalize="off" spellcheck="false"></label>
-      <details class="field"><summary style="cursor:pointer;color:var(--muted);font-size:13px;margin:0 4px 8px">${t('welcome.advanced')}</summary>
+      <details class="more"><summary>${t('welcome.advanced')}</summary>
         <label class="field"><span>${t('welcome.branch')}</span><input name="branch" placeholder="main"></label>
         <label class="field"><span>${t('welcome.api')}</span><input name="api" placeholder="https://api.github.com" value="${join?.api ? esc(join.api) : ''}"></label>
       </details>
@@ -558,10 +560,11 @@ function bindEncFields(root, onToggle) {
   const on = $('#encOn', root);
   on.onchange = () => { $('#encBox', root).hidden = !on.checked; onToggle?.(on.checked); if (on.checked) $('#encPass', root).focus(); };
 }
+const MIN_PASS = 4;
 function readEncFields(root) {
   if (!$('#encOn', root)?.checked) return { pass: null };
   const a = $('#encPass', root).value, b = $('#encPass2', root).value;
-  if (a.length < 8) return { error: t('enc.short') };
+  if (a.length < MIN_PASS) return { error: t('enc.short') };
   if (a !== b) return { error: t('enc.mismatch') };
   return { pass: a, vault: !!$('#encVault', root)?.checked };
 }
@@ -616,6 +619,7 @@ async function openSpace(sp, { initTitle, initPass, initVault = true } = {}) {
   S.pending = load(LS.pending(sp.id), []);
   Object.assign(S, { index: null, head: null, base: null, album: null, me: null, tab: 'photos' });
   S.filter = { kind: '', tag: '', q: '' };
+  S.setPage = null;
   S.semantic = null;
   AIS.emb = null;
   S.selected.clear();
@@ -854,7 +858,8 @@ function renderInit(empty) {
         $('#toolbar').hidden = false;
         adopt(r);
         toast(t('init.done'));
-        if (recovery) recoveryDone(recovery, vaultErr);
+        // then: Face ID and smart tags, asked once the album exists
+        if (recovery) recoveryDone(recovery, vaultErr, albumSetupSheet); else albumSetupSheet();
       } catch (e) {
         btn.disabled = false; btn.textContent = t('init.create');
         toast(errMsg(e), 4000);
@@ -1262,65 +1267,127 @@ function pickAlbum(ids) {
 
 function renderSettings() {
   const el = $('#tab-settings');
+  const page = S.setPage;
+  if (page === 'security') el.innerHTML = settingsSecurity();
+  else if (page === 'app') el.innerHTML = settingsApp();
+  else if (page === 'limits') el.innerHTML = settingsLimits();
+  else if (page === 'albums') el.innerHTML = settingsAlbums();
+  else el.innerHTML = settingsHome();
+  if ($('[data-lang]', el)) $('[data-lang]', el).value = lang();
+  observeThumbs(el);
+  if (page === 'app') cacheSize();
+  // draw the ring from empty once it's on screen
+  requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', el).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
+}
+
+/** A row that opens a group of settings. */
+const groupRow = (key, icon, title, sub) => `<button class="row row-btn group-row" data-setpage="${key}"><span class="group-ic ${key}">${icon}</span><span class="grow"><b>${title}</b><small>${sub}</small></span><span class="val">›</span></button>`;
+const subHead = title => `<div class="hero sub-hero"><div style="min-width:0"><button class="back" data-act="setBack">${ICON.back}${t('tab.settings')}</button><h1>${title}</h1></div></div>`;
+
+function settingsHome() {
   const all = photos();
   const u = storageUsage();
   const members = Object.entries(S.index.members || {});
   const counts = {};
   all.forEach(p => { counts[p.by] = (counts[p.by] || 0) + 1; });
-  const repoUrl = S.gh.webUrl;
-  const sw = key => `<div class="row"><div class="grow"><b>${t('opt.' + key)}</b></div><label class="switch"><input type="checkbox" data-pref="${key}"${prefs[key] ? ' checked' : ''}><span></span></label></div>`;
-  el.innerHTML = `<div class="hero"><div><h1>${t('tab.settings')}</h1><p>${esc(S.index.title || '')}</p></div></div>
+  const secSub = S.gh.sealed ? [t('enc.on'), myPasskey() ? t('pk.short', { name: bioName() }) : ''].filter(Boolean).join(' · ') : t('sec.plain');
+  return `<div class="hero"><div><h1>${t('tab.settings')}</h1><p>${esc(S.index.title || '')}</p></div></div>
+    <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
+    <div class="panel">
+      <div class="storage">${ring(u.ratio, u.level)}<div style="min-width:0"><div class="big">${t('set.left', { b: C.fmtBytes(u.remaining) })}</div><div class="sub">${C.fmtBytes(u.used)} / 10 GB</div>
+        <div class="legend"><span><i style="background:var(--primary)"></i>${t('set.originals')} ${C.fmtBytes(u.breakdown.original)}</span><span><i style="background:#ff9f0a"></i>${t('set.liveVideo')} ${C.fmtBytes(u.breakdown.live)}</span><span><i style="background:#30d158"></i>${t('set.previews')} ${C.fmtBytes(u.breakdown.preview + u.breakdown.thumb)}</span></div></div></div>
+    </div>
+    <h2 class="section-title">${t('set.album')}</h2>
+    <div class="panel">
+      ${S.canWrite ? `<button class="row row-btn" data-act="rename"><span class="grow"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : `<div class="row"><div class="grow"><b>${esc(S.index.title || '')}</b><small>${t('set.readonly')}</small></div></div>`}
+      ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && S.index.photos[S.index.cover] ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
+      ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
+      ${all.length ? `<button class="row row-btn" data-act="downloadAll"><span class="grow"><b>${t('dl.all')}</b><small>${t('n.photos', { n: all.length })}</small></span><span class="val">›</span></button>` : ''}
+    </div>
     <h2 class="section-title">${t('set.people')}</h2>
     <div class="panel">
       ${members.map(([login]) => `<div class="row"><img class="avatar" alt="" src="${avatar(login)}" loading="lazy"><div class="grow"><b>@${esc(login)}${login === S.me?.login ? ` (${t('set.me')})` : ''}</b><small>${t('n.photos', { n: counts[login] || 0 })}</small></div></div>`).join('')}
       <button class="row" style="width:100%" data-act="invite"><span class="grow" style="text-align:left;color:var(--primary)">+ ${t('invite.title')}</span></button>
     </div>
-    <h2 class="section-title">${t('set.album')}</h2>
+    <h2 class="section-title">${t('set.more')}</h2>
+    <div class="panel">
+      ${groupRow('security', ICON.lock, t('sec.title'), secSub)}
+      ${groupRow('app', ICON.gear, t('appset.title'), t('appset.sub'))}
+      ${groupRow('limits', ICON.gauge, t('set.limits'), t('limits.sub', { b: C.fmtBytes(u.repo) }))}
+      ${groupRow('albums', ICON.album, t('set.albums'), t('albums.sub', { n: S.spaces.filter(x => tokenFor(x)).length }))}
+    </div>
+    <div class="panel" style="margin-top:22px"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b></div>${S.auth ? `<button class="text-btn danger" data-act="logout">${t('auth.signOut')}</button>` : ''}</div></div>`;
+}
+
+function settingsSecurity() {
+  const repoUrl = S.gh.webUrl;
+  const conv = load(LS.convert(S.space.id), null);
+  return `${subHead(t('sec.title'))}
     <div class="panel">
       <div class="row"><div class="grow"><b>${esc(S.space.owner)}/${esc(S.space.repo)}</b><small>${S.repoInfo?.private === false ? `⚠️ ${t('home.public')}` : t('set.private')} · ${esc(S.gh.branch)}${S.canWrite ? '' : ` · ${t('set.readonly')}`}</small></div>${repoUrl ? `<a class="text-btn" href="${repoUrl}" target="_blank" rel="noopener">GitHub</a>` : ''}</div>
-      ${S.canWrite ? `<button class="row" style="width:100%" data-act="rename"><span class="grow" style="text-align:left"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : ''}
-      ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && S.index.photos[S.index.cover] ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
-      ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
+    </div>
+    <h2 class="section-title">${t('sec.encryption')}</h2>
+    <div class="panel">
       ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
+      ${S.canWrite ? `<button class="row row-btn" data-act="passkey"><span class="grow"><b>${esc(t('pk.title', { name: bioName() }))}</b><small>${passkeyStatus()}</small></span><span class="val">›</span></button>` : ''}
       ${isOwner() ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b><small>${t('enc.ownerOnly')}</small></span><span class="val">›</span></button>
       <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.method')}</b><small>${recoveryStatus()}</small></span><span class="val">›</span></button>` : ''}
-      ${S.canWrite ? `<button class="row row-btn" data-act="passkey"><span class="grow"><b>${esc(t('pk.title', { name: bioName() }))}</b><small>${passkeyStatus()}</small></span><span class="val">›</span></button>` : ''}
-      <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
-      ${isOwner() && !S.gh.sealed ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(load(LS.convert(S.space.id), null)?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : ''}
-      ${isOwner() && S.gh.sealed ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(load(LS.convert(S.space.id), null)?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}
-      ${all.length ? `<button class="row row-btn" data-act="downloadAll"><span class="grow"><b>${t('dl.all')}</b><small>${t('n.photos', { n: all.length })}</small></span><span class="val">›</span></button>` : ''}
-      ${S.canWrite ? `<button class="row row-btn" data-act="purge"><span class="grow"><b style="color:var(--danger)">${t('purge.title')}</b></span><span class="val">›</span></button>` : ''}
+      <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b><small>${t('enc.lockHereSub')}</small></span><span class="val">›</span></button>
+      ${isOwner() ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(conv?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}`
+    : `<div class="row"><div class="grow"><b>${t('sec.plainTitle')}</b><small>${t('sec.plainBody')}</small></div></div>
+      ${isOwner() ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(conv?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : `<div class="row"><div class="grow"><small>${t('sec.ownerEncrypts')}</small></div></div>`}`}
     </div>
-    <h2 class="section-title" id="storageTitle">${t('set.storage')}</h2>
+    ${S.canWrite ? `<h2 class="section-title">${t('sec.history')}</h2>
+    <div class="panel"><button class="row row-btn" data-act="purge"><span class="grow"><b style="color:var(--danger)">${t('purge.title')}</b><small>${t('sec.purgeSub')}</small></span><span class="val">›</span></button></div>` : ''}`;
+}
+
+function settingsApp() {
+  const sw = key => `<div class="row"><div class="grow"><b>${t('opt.' + key)}</b>${t('opt.' + key + '.d') !== 'opt.' + key + '.d' ? `<small>${t('opt.' + key + '.d')}</small>` : ''}</div><label class="switch"><input type="checkbox" data-pref="${key}"${prefs[key] ? ' checked' : ''}><span></span></label></div>`;
+  return `${subHead(t('appset.title'))}
     <div class="panel">
-      <div class="storage">${ring(u.ratio, u.level)}<div style="min-width:0"><div class="big">${t('set.left', { b: C.fmtBytes(u.remaining) })}</div><div class="sub">${C.fmtBytes(u.used)} / 10 GB</div>
-        <div class="legend"><span><i style="background:var(--primary)"></i>${t('set.originals')} ${C.fmtBytes(u.breakdown.original)}</span><span><i style="background:#ff9f0a"></i>${t('set.liveVideo')} ${C.fmtBytes(u.breakdown.live)}</span><span><i style="background:#30d158"></i>${t('set.previews')} ${C.fmtBytes(u.breakdown.preview + u.breakdown.thumb)}</span></div></div></div>
-      <div class="row"><div class="grow"><b>${t('set.githubSize')}</b></div><span class="val">${C.fmtBytes(u.repo)}</span></div>
+      <div class="row"><div class="grow"><b>${t('set.language')}</b></div><select class="lang-select" data-lang aria-label="${t('set.language')}"><option value="en">English</option><option value="ko">한국어</option></select></div>
     </div>
-    <h2 class="section-title">${t('set.limits')}</h2>
-    <div class="panel">${limitRows()}</div>
-    <h2 class="section-title">${t('set.albums')}</h2>
+    <h2 class="section-title">${t('appset.photos')}</h2>
+    <div class="panel">
+      ${sw('keepOriginal')}
+      ${sw('autoplayLive')}
+      ${sw('geocode')}
+      <div class="row"><div class="grow"><b>${t('ai.opt')}</b><small id="aiStatus">${aiStatusText()}</small></div><label class="switch"><input type="checkbox" data-ai-toggle${prefs.ai ? ' checked' : ''}><span></span></label></div>
+      ${canNotify() ? sw('notify') : ''}
+    </div>
+    <h2 class="section-title">${t('appset.device')}</h2>
+    <div class="panel">
+      <button class="row row-btn" data-act="clearCache"><span class="grow"><b>${t('set.clearCache')}</b><small>${t('set.clearCacheSub')} <span id="cacheSize"></span></small></span></button>
+    </div>
+    <p class="set-note">${t('appset.note')}</p>`;
+}
+
+function settingsLimits() {
+  const u = storageUsage();
+  return `${subHead(t('set.limits'))}
+    <p class="set-note" style="margin-top:0">${t('limits.intro')}</p>
+    <div class="panel">
+      <div class="row"><div class="grow"><b>${t('set.githubSize')}</b></div><span class="val">${C.fmtBytes(u.repo)}</span></div>
+      ${limitRows()}
+    </div>`;
+}
+
+function settingsAlbums() {
+  return `${subHead(t('set.albums'))}
     <div class="panel">
       ${S.spaces.filter(x => tokenFor(x)).map(x => `<div class="row"><button class="grow" data-space="${esc(x.id)}"><b>${esc(x.title || x.repo)}</b><small>${esc(x.owner)}/${esc(x.repo)}${x.id === S.space.id ? ` · <span class="tick">✓</span>` : ''}</small></button><button class="text-btn danger" data-unlink="${esc(x.id)}">${t('set.remove')}</button></div>`).join('')}
       ${S.auth ? `<button class="row row-btn" data-act="home"><span class="grow" style="color:var(--primary)">${t('set.allAlbums')}</span></button>` : ''}
       <button class="row" style="width:100%" data-act="addSpace"><span class="grow" style="text-align:left;color:var(--primary)">+ ${t('welcome.tokenAdvanced')}</span></button>
-    </div>
-    <h2 class="section-title">${t('set.options')}</h2>
-    <div class="panel">
-      <div class="row"><div class="grow"><b>${t('set.language')}</b></div><select class="lang-select" data-lang aria-label="${t('set.language')}"><option value="en">English</option><option value="ko">한국어</option></select></div>
-      ${sw('autoplayLive')}
-      ${sw('keepOriginal')}
-      ${sw('geocode')}
-      ${canNotify() ? sw('notify') : ''}
-      <div class="row"><div class="grow"><b>${t('ai.opt')}</b><small id="aiStatus">${aiStatusText()}</small></div><label class="switch"><input type="checkbox" data-ai-toggle${prefs.ai ? ' checked' : ''}><span></span></label></div>
-      <button class="row" style="width:100%" data-act="clearCache"><span class="grow" style="text-align:left"><b>${t('set.clearCache')}</b></span></button>
-    </div>
-    <h2 class="section-title">${t('set.account')}</h2>
-    <div class="panel"><div class="row"><img class="avatar" alt="" src="${esc(S.auth?.avatar || avatar(S.me?.login || 'ghost'))}"><div class="grow"><b>@${esc(S.me?.login || '')}</b></div>${S.auth ? `<button class="text-btn danger" data-act="logout">${t('auth.signOut')}</button>` : ''}</div></div>`;
-  $('[data-lang]', el).value = lang();
-  observeThumbs(el);
-  // draw the ring from empty once it's on screen
-  requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring .val', el).forEach(c => { c.style.strokeDashoffset = c.dataset.off; })));
+    </div>`;
+}
+
+/** How much this device keeps (cached photos, the AI model): a browser estimate. */
+async function cacheSize() {
+  try {
+    const e = await navigator.storage?.estimate?.();
+    const el = $('#cacheSize');
+    if (el && e?.usage != null) el.textContent = t('set.cacheUsed', { b: C.fmtBytes(e.usage) });
+  } catch { /* not supported */ }
 }
 
 function inviteSheet() {
@@ -1892,11 +1959,11 @@ async function saveHeader(header, message) {
   });
 }
 
-function recoverySheet(code) {
+function recoverySheet(code, then) {
   const sh = openSheet(`<h2>${t('rec.title')}</h2><p class="sheet-p">${t('rec.body')}</p>
     <div class="code-box" id="rcCode">${esc(code)}</div>
     <div class="actions"><button class="btn btn-quiet" id="rcCopy">${t('common.copy')}</button><button class="btn btn-quiet" id="rcSave">${t('rec.save')}</button></div>
-    <button class="btn btn-primary btn-block" data-close style="margin-top:10px">${t('common.done')}</button>`, { kind: 'recovery' });
+    <button class="btn btn-primary btn-block" data-close style="margin-top:10px">${t('common.done')}</button>`, { kind: 'recovery', onClose: then && (() => setTimeout(then, 320)) });
   $('#rcCopy', sh).onclick = async () => { try { await navigator.clipboard.writeText(code); toast(t('common.copied')); } catch { getSelection().selectAllChildren($('#rcCode', sh)); } };
   $('#rcSave', sh).onclick = () => {
     const a = document.createElement('a');
@@ -1938,14 +2005,15 @@ async function vaultForget(vault) {
 }
 
 /** After a code is made: say where it went, or hand it over when it's kept by hand. */
-function recoveryDone(code, vaultErr) {
+function recoveryDone(code, vaultErr, then) {
   const v = S.gh.header?.recovery?.vault;
-  if (!v) { recoverySheet(code); if (vaultErr) toast(t('vault.failed', { e: errMsg(vaultErr) }), 5000); return; }
+  if (!v) { recoverySheet(code, then); if (vaultErr) toast(t('vault.failed', { e: errMsg(vaultErr) }), 5000); return; }
+  let handoff = false; // "Show code" swaps sheets: the next step waits for that one
   const sh = openSheet(`<h2>${t('vault.savedTitle')}</h2>
     <p class="sheet-p">${t('vault.savedBody', { repo: `<b>${esc(v.owner)}/moa-vault</b>` })}</p>
     <p class="sheet-p warn-note">${t('vault.tradeoff')}</p>
-    <div class="actions"><button class="btn btn-quiet" id="vdShow">${t('vault.showCode')}</button><button class="btn btn-primary" data-close>${t('common.done')}</button></div>`, { kind: 'recovery' });
-  $('#vdShow', sh).onclick = () => recoverySheet(code);
+    <div class="actions"><button class="btn btn-quiet" id="vdShow">${t('vault.showCode')}</button><button class="btn btn-primary" data-close>${t('common.done')}</button></div>`, { kind: 'recovery', onClose: () => { if (!handoff && then) setTimeout(then, 320); } });
+  $('#vdShow', sh).onclick = () => { handoff = true; recoverySheet(code, then); };
 }
 
 function newRecoverySheet() {
@@ -1990,7 +2058,7 @@ function passphraseSheet({ forgot = false, title } = {}) {
     const err = $('#ppErr', sh);
     const fail = m => { err.textContent = m; err.hidden = false; };
     const a = $('#encPass', sh).value;
-    if (a.length < 8) return fail(t('enc.short'));
+    if (a.length < MIN_PASS) return fail(t('enc.short'));
     if (a !== $('#encPass2', sh).value) return fail(t('enc.mismatch'));
     const btn = $('#ppOk', sh);
     btn.disabled = true; btn.textContent = t('lock.unlocking');
@@ -2127,7 +2195,7 @@ function encryptAlbumSheet() {
   setTimeout(() => $('#encPass', sh).focus(), 50);
   $('#cvGo', sh).onclick = () => {
     const a = $('#encPass', sh).value, err = $('#cvErr', sh);
-    if (a.length < 8) { err.textContent = t('enc.short'); err.hidden = false; return; }
+    if (a.length < MIN_PASS) { err.textContent = t('enc.short'); err.hidden = false; return; }
     if (a !== $('#encPass2', sh).value) { err.textContent = t('enc.mismatch'); err.hidden = false; return; }
     convertAlbum(true, { pass: a, vault: $('#encVault', sh).checked });
   };
@@ -2139,6 +2207,50 @@ function decryptAlbumSheet() {
     <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="cvPurge" checked><span></span></label></div>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="cvGo">${t('conv.decrypt')}</button></div>`);
   $('#cvGo', sh).onclick = () => convertAlbum(false, { purge: $('#cvPurge', sh).checked });
+}
+
+/** A new album: offer Face ID (encrypted albums) and smart tags (once per device) in one step. */
+async function albumSetupSheet() {
+  const sp = S.space, name = bioName();
+  const askPk = S.gh?.sealed && S.canWrite && !myPasskey() && await passkeyAvailable();
+  const askAi = !prefs.ai;
+  if (S.space !== sp || (!askPk && !askAi) || sheetOpen() || U.running) return; // nothing to ask, or the person moved on
+  const sh = openSheet(`<h2>${t('setup.title')}</h2><p class="sheet-p">${t(askPk && askAi ? 'setup.body' : 'setup.body1')}</p>
+    ${askPk ? `<div class="row opt-row setup-opt"><div class="grow"><b>${ICON.faceid}${esc(t('pk.title', { name }))}</b><small>${esc(t('setup.pk', { name }))}</small></div><label class="switch"><input type="checkbox" id="suPk" checked><span></span></label></div>` : ''}
+    ${askAi ? `<div class="row opt-row setup-opt"><div class="grow"><b>${ICON.spark}${t('ai.opt')}</b><small>${t('setup.ai')}</small></div><label class="switch"><input type="checkbox" id="suAi"><span></span></label></div>
+    <ul class="consent" id="suAiInfo" hidden><li class="consent-h">${t('setup.aiAgree')}</li><li>${t('ai.c1')}</li><li>${t('ai.c2')}</li><li>${t('ai.c3')}</li><li>${t('ai.c4')}</li></ul>` : ''}
+    <p class="err" id="suErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('setup.later')}</button><button class="btn btn-primary" id="suGo">${t('setup.go')}</button></div>
+    ${askPk && askAi ? `<p class="set-note" style="margin:12px 4px 0">${t('setup.note')}</p>` : ''}`, { kind: 'setup' });
+  // turning smart tags on here is the consent, so the terms show right there
+  $('#suAi', sh)?.addEventListener('change', e => { $('#suAiInfo', sh).hidden = !e.target.checked; });
+  $('#suGo', sh).onclick = async () => {
+    const btn = $('#suGo', sh), err = $('#suErr', sh);
+    btn.disabled = true; err.hidden = true;
+    if ($('#suAi', sh)?.checked) {
+      prefs.ai = true;
+      prefs.aiConsentAt = new Date().toISOString();
+      save(LS.prefs, prefs);
+      aiStart();
+    }
+    if ($('#suPk', sh)?.checked) {
+      try {
+        const { header, id } = await addPasskey(S.gh.header, S.gh.key, { title: S.index?.title || sp.repo, user: S.me?.login || 'moa', label: deviceLabel(), by: S.me?.login || '' });
+        await saveHeader(header, `Moa: add ${name} unlock`);
+        save(LS.passkey(sp.id), id);
+      } catch (ex) {
+        if (!(ex instanceof NoPasskey && ex.message === 'cancelled')) {
+          btn.disabled = false;
+          $('#suPk', sh).checked = false;
+          err.textContent = ex instanceof NoPasskey ? t('pk.unsupported', { name }) : errMsg(ex);
+          err.hidden = false;
+          return;
+        }
+      }
+    }
+    closeSheet();
+    rerender();
+  };
 }
 
 // ---------------- Face ID / Touch ID: a passkey that opens an encrypted album ----------------
@@ -2206,10 +2318,10 @@ async function passkeySheet() {
   });
 }
 
-function lockHere() {
+async function lockHere() {
   const sp = S.space;
   S.keys.delete(sp.id);
-  forgetKey(sp.id);
+  await forgetKey(sp.id); // gone before the lock screen shows, so a reload right away stays locked
   S.gh.key = null;
   for (const k of [...resolved.keys()]) if (k.startsWith(sp.id + ':')) { URL.revokeObjectURL(resolved.get(k)); resolved.delete(k); urls.delete(k); }
   renderLocked(S.gh.header);
@@ -3328,6 +3440,7 @@ function bind() {
     const b = e.target.closest('[data-tab]');
     if (!b || !S.index) return;
     if (b.dataset.tab === 'photos' && S.tab === 'photos' && S.album) S.album = null;
+    if (b.dataset.tab === 'settings') S.setPage = null; // the tab always opens (or goes back to) the top of Settings
     showTab(b.dataset.tab);
   };
   $('#viewSeg').onclick = e => {
@@ -3363,8 +3476,9 @@ function bind() {
       } else openViewer(id, S.list, tile);
       return;
     }
-    const b = e.target.closest('[data-act],[data-album],[data-smart],[data-space],[data-unlink]');
+    const b = e.target.closest('[data-act],[data-album],[data-smart],[data-space],[data-unlink],[data-setpage]');
     if (!b) return;
+    if (b.dataset.setpage) { S.setPage = b.dataset.setpage; renderSettings(); window.scrollTo(0, 0); return; }
     if (b.dataset.album) { S.album = b.dataset.album; S.filter = { kind: '', tag: '', q: '' }; showTab('photos'); return; }
     if (b.dataset.smart) {
       const k = b.dataset.smart;
@@ -3398,6 +3512,7 @@ function bind() {
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
       case 'mainCover': return mainCoverSheet();
+      case 'setBack': S.setPage = null; renderSettings(); window.scrollTo(0, 0); return;
       case 'stats': return showStats();
       case 'purge': return purgeSheet();
       case 'downloadAll': return downloadSheet(photos().sort((a, b) => C.sortTs(a) - C.sortTs(b)));
@@ -3407,7 +3522,7 @@ function bind() {
       case 'decryptAlbum': return decryptAlbumSheet();
       case 'lockHere': return lockHere();
       case 'passkey': return passkeySheet();
-      case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
+      case 'storage': S.setPage = null; showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
       case 'home': return showHome();
       case 'logout': return logout();
@@ -3482,7 +3597,16 @@ function applyStaticText() {
 
 function registerSW() {
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // a new deploy's worker took over: reload into it (styles, icons, code) unless something is in progress
+    const hadWorker = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker) return; // first visit: nothing old on screen
+      const busy = () => U.running || CONV.running || DL.running || sheetOpen() || S.pending.length;
+      if (!busy()) return location.reload();
+      toast(t('app.updated'), 4000);
+      const later = setInterval(() => { if (!busy() && document.hidden) { clearInterval(later); location.reload(); } }, 5000);
+    });
+    navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {});
   }
 }
 

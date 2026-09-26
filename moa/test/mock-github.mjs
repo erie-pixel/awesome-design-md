@@ -57,6 +57,8 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       paths: () => [...(treeAt(repo)?.keys() || [])].sort(),
       shaOf: path => treeAt(repo)?.get(path),
       setSizeKB: kb => { repo.sizeKB = kb; },
+      /** A file goes missing behind the app's back (another tool, a half-finished old commit). */
+      dropFile(path) { const t = new Map(treeAt(repo)); t.delete(path); repo.ref = putCommit({ tree: putTree(t), parents: [repo.ref], message: 'external: drop ' + path }); },
       commitJson(path, mutator, message = 'external') {
         const t = new Map(treeAt(repo));
         const doc = JSON.parse(blobs.get(t.get(path)).toString('utf8'));
@@ -189,6 +191,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       // non-recursive listing; sub-directories become synthetic tree objects
       const t = trees.get(m[1]);
       if (!t) return send(404, { message: 'Not Found' });
+      if (url.searchParams.get('recursive')) return send(200, { sha: m[1], tree: [...t].map(([path, b]) => ({ path, mode: '100644', type: 'blob', sha: b, size: blobs.get(b).length })), truncated: false });
       const dirs = new Map(), out = [];
       for (const [path, b] of t) {
         const i = path.indexOf('/');
@@ -231,9 +234,11 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       const base = trees.get(body.base_tree);
       if (!base) return send(422, { message: 'base_tree not found' });
       const t = new Map(base);
+      // like GitHub: one bad entry (a missing path to delete, a path twice) fails the whole tree
+      if (new Set(body.tree.map(e => e.path)).size !== body.tree.length) return send(422, { message: 'Invalid tree info' });
       for (const e of body.tree) {
         if (e.sha === null) {
-          if (!t.has(e.path)) return send(422, { message: `tree.path ${e.path} does not exist` });
+          if (!t.has(e.path)) return send(422, { message: 'Invalid tree info' });
           t.delete(e.path);
         } else {
           if (!blobs.has(e.sha)) return send(422, { message: 'blob missing' });

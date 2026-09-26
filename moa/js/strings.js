@@ -327,4 +327,5 @@ export default {
   "join.waiting": ["Asked to join {name}. You're in as soon as {by} opens Moa.", "{name} 참여를 요청했어요. {by}님이 Moa를 열면 바로 들어가요."],
   "join.gone": ["This invite was already used or has expired.", "이미 사용했거나 만료된 초대예요."],
   "join.own": ["This is your own invite.", "내가 만든 초대예요."],
+  "home.fresh": ["New", "새 소식"],
 };

@@ -36,7 +36,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
   const perm = (repo, user) => repo.collaborators.get(user);
   const repoJson = (repo, user) => ({
     id: repo.name.length, name: repo.name, full_name: `${repo.owner}/${repo.name}`, owner: { login: repo.owner },
-    private: repo.private, description: repo.description, default_branch: 'main', size: repo.sizeKB, topics: repo.topics,
+    private: repo.private, description: repo.description, default_branch: 'main', size: repo.sizeKB, topics: repo.topics, pushed_at: repo.pushedAt || null,
     permissions: { admin: perm(repo, user) === 'admin', push: ['admin', 'push'].includes(perm(repo, user)), pull: !!perm(repo, user) },
   });
   const inviteJson = (repo, i) => ({ id: i.id, repository: repoJson(repo, i.invitee), inviter: { login: i.inviter, avatar_url: '' }, invitee: { login: i.invitee, avatar_url: '' } });
@@ -63,6 +63,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
         mutator(doc);
         t.set(path, putBlob(Buffer.from(JSON.stringify(doc, null, 2))));
         repo.ref = putCommit({ tree: putTree(t), parents: [repo.ref], message });
+        repo.pushedAt = new Date().toISOString();
       },
       putFile(path, data, message = 'seed') {
         const t = new Map(repo.ref ? treeAt(repo) : []);
@@ -217,6 +218,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
         const t = new Map(repo.ref ? treeAt(repo) : []);
         t.set(path, putBlob(Buffer.from(body.content, 'base64')));
         repo.ref = putCommit({ tree: putTree(t), parents: repo.ref ? [repo.ref] : [], message: body.message });
+        repo.pushedAt = new Date().toISOString();
         pushed();
         return send(201, { commit: { sha: repo.ref } });
       }
@@ -248,6 +250,7 @@ export function createMockGitHub({ users = { 'tok-alice': 'alice', 'tok-bob': 'b
       if (!commits.has(body.sha)) return send(422, { message: 'Object does not exist' });
       if (!body.force && repo.ref && !isAncestor(repo.ref, body.sha)) { stats.conflicts++; return send(422, { message: 'Update is not a fast forward' }); }
       repo.ref = body.sha;
+      repo.pushedAt = new Date().toISOString();
       pushed();
       return send(200, { ref: 'refs/heads/main', object: { sha: repo.ref } });
     }

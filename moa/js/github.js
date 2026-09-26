@@ -15,7 +15,7 @@
    repository shows no names, dates, places or pixels.
    ============================================================ */
 
-import { INDEX_PATH, META_PATH, SEALED_META, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf } from './core.js';
+import { INDEX_PATH, META_PATH, SEALED_META, SHARD_DIR, parseIndex, joinIndex, splitIndex, emptyIndex, applyOps, filesOf, replacedFiles } from './core.js';
 import { waitFor } from './limits.js';
 import { t } from './i18n.js';
 import { isHeader, isSealed, seal, sealParts, open } from './crypto.js';
@@ -284,8 +284,14 @@ export class Repo {
         base && base.head === head && base.files ? base : this.state(head),
       ]);
       const ix = st.index ? structuredClone(st.index) : emptyIndex(title);
-      const deletes = [];
-      for (const op of ops) if (op.op === 'deletePhotos') for (const id of op.ids) if (ix.photos[id]) deletes.push(...filesOf(ix.photos[id]));
+      const deletes = [], orphans = new Set();
+      for (const op of ops) {
+        if (op.op === 'deletePhotos') for (const id of op.ids) if (ix.photos[id]) deletes.push(...filesOf(ix.photos[id]));
+        if (op.op === 'replacePhoto') {
+          if (ix.photos[op.id]) deletes.push(...replacedFiles(ix, op));
+          else Object.values(op.set.files || {}).forEach(f => orphans.add(f)); // deleted meanwhile: don't add its new files
+        }
+      }
       applyOps(ix, ops);
       const next = splitIndex(ix, { sealed: this.sealed });
       const changed = [...next].filter(([path, text]) => st.files.get(path)?.text !== text);
@@ -295,7 +301,7 @@ export class Repo {
       changed.forEach(([path], i) => { nextFiles.get(path).sha = shas[i]; });
       const removed = [...st.files.keys()].filter(path => !next.has(path));
       const entries = [
-        ...files.map(f => ({ path: f.path, mode: '100644', type: 'blob', sha: f.sha })),
+        ...files.filter(f => !orphans.has(f.path)).map(f => ({ path: f.path, mode: '100644', type: 'blob', sha: f.sha })),
         ...changed.map(([path], i) => ({ path, mode: '100644', type: 'blob', sha: shas[i] })),
         ...[...new Set([...deletes, ...removed])].map(path => ({ path, mode: '100644', type: 'blob', sha: null })),
       ];

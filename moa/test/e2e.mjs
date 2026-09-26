@@ -11,6 +11,7 @@ import { createMockGitHub } from './mock-github.mjs';
 import { withExif } from './fixtures.mjs';
 import * as oauth from '../server/oauth.js';
 import * as K from '../js/crypto.js';
+import * as C from '../js/core.js';
 
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch { ({ chromium } = await import('/opt/node22/lib/node_modules/playwright/index.mjs')); }
@@ -27,11 +28,13 @@ const APP = `http://localhost:${APP_PORT}/index.html`;
 // ---------- servers ----------
 const { server: apiServer, api } = createMockGitHub({ users: { 'tok-alice': 'alice', 'tok-bob': 'bob', 'tok-dave': 'dave' } });
 await new Promise(r => apiServer.listen(API_PORT, r));
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 
 // Same CSP as production (vercel.json), with the mock API origin allowed.
 const CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers[0].headers.find(h => h.key === 'Content-Security-Policy').value
   .replace("connect-src 'self'", `connect-src 'self' ${API} http://localhost:${API_PORT + 1}`);
+// the AI worker gets its own, looser policy (WASM, Hugging Face) — exactly as vercel.json serves it
+const WORKER_CSP = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers.find(h => h.source === '/js/ai-worker.js').headers.find(h => h.key === 'Content-Security-Policy').value;
 
 // The real /api/auth/* handlers, pointed at a fake github.com served below.
 const APP_ORIGIN = `http://localhost:${APP_PORT}`;
@@ -82,7 +85,7 @@ const appServer = http.createServer(async (req, res) => {
   }
   const p = path.join(ROOT, decodeURIComponent(u.pathname === '/' ? '/index.html' : u.pathname));
   if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Content-Security-Policy': CSP });
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Content-Security-Policy': u.pathname === '/js/ai-worker.js' ? WORKER_CSP : CSP });
   fs.createReadStream(p).pipe(res);
 });
 await new Promise(r => appServer.listen(APP_PORT, r));
@@ -104,7 +107,8 @@ const watch = (page, who) => {
   page.on('pageerror', e => { console.log(`pageerror(${who}):`, e.message); failures++; });
   page.on('console', m => { if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) { console.log(`CSP(${who}):`, m.text()); failures++; } });
 };
-const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+// UTF-8 locale so Korean download names survive, as on any real device
+const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'], env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } });
 
 try {
   // ---------- stubs for OSM ----------
@@ -146,7 +150,9 @@ try {
       const gr = g.createLinearGradient(0, 0, 1600, 1200);
       colors.forEach((col, i) => gr.addColorStop(i / (colors.length - 1), col));
       g.fillStyle = gr; g.fillRect(0, 0, 1600, 1200);
-      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.18})`; g.beginPath(); g.arc(Math.random() * 1600, Math.random() * 1200, 30 + Math.random() * 160, 0, 7); g.fill(); }
+      let seed = [...label].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0; // same picture every run
+      const rnd = () => { seed = (seed + 0x6d2b79f5) >>> 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${rnd() * 0.18})`; g.beginPath(); g.arc(rnd() * 1600, rnd() * 1200, 30 + rnd() * 160, 0, 7); g.fill(); }
       g.fillStyle = 'rgba(0,0,0,.35)'; g.font = '600 120px sans-serif'; g.textAlign = 'center'; g.fillText(label, 800, 640);
       const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
       const buf = new Uint8Array(await blob.arrayBuffer());
@@ -696,6 +702,182 @@ try {
   await A.click('[data-repo="alice/moa-spring-trip"]');
   await A.waitForSelector('#content .tile');
 
+  // select photos → Download → one ZIP with the originals (and Live Photo videos)
+  await A.click('#selectBtn');
+  const pick = await A.$$eval('#content .tile', t => t.slice(0, 2).map(x => x.dataset.id));
+  for (const id of pick) await A.click(`#content .tile[data-id="${id}"]`);
+  await A.click('[data-sel=download]');
+  await A.click('#dlZip');
+  await A.waitForSelector('#dlSave', { timeout: 30000 });
+  const [zipDl] = await Promise.all([A.waitForEvent('download'), A.click('#dlSave')]);
+  const zipPath = path.join(ROOT, '.e2e-download.zip');
+  await zipDl.saveAs(zipPath);
+  const want = await A.evaluate(ids => ids.map(id => window.__moa.S.index.photos[id].name), pick);
+  const { execFileSync } = await import('node:child_process');
+  const zipInfo = JSON.parse(execFileSync('python3', ['-c', 'import zipfile,json,sys,subprocess; z=zipfile.ZipFile(sys.argv[1]); t=subprocess.run(["unzip","-tq",sys.argv[1]],capture_output=True); print(json.dumps({"bad": z.testzip() or (t.returncode and t.stdout.decode()), "names": z.namelist()}))', zipPath]).toString());
+  const zipOk = !zipInfo.bad && want.every(n => zipInfo.names.includes(n)) && zipDl.suggestedFilename() === '우리들의 봄 여행.zip';
+  if (!zipOk) { fs.copyFileSync(zipPath, '/tmp/moa-e2e-failed.zip'); console.log('ZIP DEBUG', JSON.stringify({ zipInfo, want, file: zipDl.suggestedFilename() })); }
+  fs.unlinkSync(zipPath);
+  ok(zipOk, `selected photos download as one ZIP (${zipInfo.names.join(', ')})`);
+  await A.click('#selectBtn');
+
+  // ---------- on-device AI: consent → auto tags → search by description → off ----------
+  // Hugging Face is answered by test/fake-clip, a stand-in model (colour → meaning) that runs through
+  // the real Transformers.js + ONNX Runtime WASM in the real worker, under the worker's own CSP.
+  await ctxA.route(/huggingface\.co\/Xenova\/clip-vit-base-patch32\/resolve\/main\//, r => {
+    const f = path.join(ROOT, 'test/fake-clip', r.request().url().split('/resolve/main/')[1]);
+    return r.fulfill(fs.existsSync(f) ? { status: 200, body: fs.readFileSync(f), headers: { 'Access-Control-Allow-Origin': '*' } } : { status: 404, body: '', headers: { 'Access-Control-Allow-Origin': '*' } });
+  });
+  await A.click('[data-tab=settings]');
+  await A.click('[data-ai-toggle] + span');
+  await A.waitForSelector('#aiAgree');
+  ok(!(await A.isChecked('[data-ai-toggle]')), 'smart tags stay off until the consent sheet is accepted');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/19-ai-consent.png` }); }
+  await A.click('#aiAgree');
+  const aiOf = name => Object.values(readIndex().photos).find(p => p.name === name)?.ai;
+  await until(() => aiOf('IMG_0004.JPG')?.includes('ocean') && JSON.stringify(aiOf('IMG_0001.JPG')) === '["sunset"]', 120000).catch(async e => {
+    console.log('AI DEBUG', JSON.stringify({
+      status: await A.$eval('#aiStatus', x => x.textContent).catch(() => null),
+      local: await A.evaluate(() => Object.values(window.__moa.S.index.photos).map(p => [p.name, p.ai, p.aiv])),
+      repo: Object.values(readIndex().photos).map(p => [p.name, p.ai]),
+    }));
+    throw e;
+  });
+  ok(await A.isChecked('[data-ai-toggle]'), 'photos analysed on the device; auto tags saved to the album');
+  await A.click('[data-tab=photos]');
+  await A.click('.chip.ai:has-text("Sea")');
+  const tileNames = () => A.$$eval('#content .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name).sort());
+  ok(JSON.stringify(await tileNames()) === '["IMG_0004.JPG","IMG_0005.JPG"]', `auto-tag chip filters the library (${await tileNames()})`);
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/20-ai-chip.png` });
+  await A.click('.chip.ai:has-text("Sea")');
+  await A.click('#searchBtn');
+  // neither query matches any photo by plain text, so only the AI can bring these back
+  const seaOnly = () => A.waitForFunction(() => {
+    const n = [...document.querySelectorAll('#content .tile')].map(x => window.__moa.S.index.photos[x.dataset.id].name);
+    return n.includes('IMG_0004.JPG') && n.includes('IMG_0005.JPG') && !n.includes('IMG_0003.JPG');
+  }, null, { timeout: 15000 }).then(() => true, () => false);
+  await A.fill('#searchInput', 'the ocean view');
+  ok(await seaOnly(), `search by description finds what the words alone don't (${await tileNames()})`);
+  await A.fill('#searchInput', 'zzz');
+  await A.waitForSelector('#content .empty');
+  await A.fill('#searchInput', '파란 바다');
+  ok(await seaOnly(), `Korean search words work too (${await tileNames()})`);
+  await A.click('#searchBtn');
+  await A.click('[data-tab=settings]');
+  await A.click('[data-ai-toggle] + span');
+  await A.click('#aiClear + span');
+  await A.click('#aiOff');
+  await until(() => !Object.values(readIndex().photos).some(p => p.ai), 60000);
+  const leftover = await A.evaluate(async () => ({ db: (await indexedDB.databases()).some(d => d.name === 'moa-ai'), cache: await caches.has('transformers-cache') }));
+  ok(!leftover.db && !leftover.cache && !(await A.isChecked('[data-ai-toggle]')), `turning it off removes the auto tags, the model and the analysis data (${JSON.stringify(leftover)})`);
+
+  // ---------- quick marks · map area · covers · stats · replace ----------
+  const byName = n => Object.values(readIndex().photos).find(p => p.name === n);
+  const settle = async () => { await A.evaluate(() => window.__moa.flush()); await A.waitForFunction(() => !window.__moa.S.pending.length, null, { timeout: 150000 }); };
+  await A.click('[data-tab=photos]');
+  await A.click('[data-view=date]');
+  const shib = byName('IMG_0004.JPG');
+  await A.click(`#content .tile[data-id="${shib.id}"]`);
+  await A.waitForSelector('#viewer:not([hidden])');
+  await A.click('[data-v=info]');
+  await A.click('#vInfo [data-mark="⭐"]');
+  await A.waitForSelector('#vInfo [data-mark="⭐"].on');
+  await A.fill('#iTag', '여행');
+  const sug = await A.waitForSelector('#iTagSug [data-sug="✈️"]', { timeout: 5000 }).then(() => true, () => false);
+  ok(sug, 'typing a word ("여행") suggests its mark (✈️)');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/21-marks.png` });
+  if (sug) await A.click('#iTagSug [data-sug="✈️"]');
+  await A.waitForSelector('#vInfo [data-mark="✈️"].on');
+  await A.click('[data-i=mainCover]');
+  await A.click('[data-v=info]');
+  await A.click('[data-v=close]');
+  await settle();
+  ok(JSON.stringify(byName('IMG_0004.JPG').tags.filter(x => ['⭐', '✈️'].includes(x)).sort()) === JSON.stringify(['⭐', '✈️'].sort()), 'quick marks save as tags in one tap');
+  ok(readIndex().cover === shib.id, 'main photo chosen from the viewer');
+  ok((await A.textContent(`#content .tile[data-id="${shib.id}"] .marks`)).includes('⭐'), 'marks show on the photo tile, like the ♥');
+  await A.click('#chips .chip.mark:has-text("⭐")');
+  ok(JSON.stringify(await tileNames()) === '["IMG_0004.JPG"]', 'a mark chip filters the library like a favourite');
+  await A.click('#chips [data-chip=all]');
+
+  // map: tap a cluster → only the photos taken there
+  await A.click('[data-view=map]');
+  await A.waitForSelector('#mapArea');
+  const gpsCount = Object.values(readIndex().photos).filter(p => p.gps).length;
+  ok((await A.textContent('#mapArea')).includes(`${gpsCount} photo`), `map offers "photos in this area" (${await A.textContent('#mapArea')})`);
+  // Jeju and Seoul share one pin when zoomed out to Korea (pins group by grid cell)
+  const jeju = Object.values(readIndex().photos).filter(p => p.gps && p.gps.lat > 33 && p.gps.lat < 38.5 && p.gps.lng > 124 && p.gps.lng < 130).map(p => p.name).sort();
+  for (const z of [4, 3]) {
+    await A.evaluate(z => window.__moa.S.map.setView([34.5, 128.5], z, { animate: false }), z);
+    if (await A.waitForFunction(n => [...document.querySelectorAll('.pin .cnt')].some(c => +c.textContent === n), jeju.length, { timeout: 1500 }).then(() => true, () => false)) break;
+  }
+  const pins = A.locator('.leaflet-marker-icon:has(.cnt)'); // pins overlap at this zoom; tap each group in turn
+  let hit = false;
+  for (let i = 0; i < await pins.count() && !hit; i++) {
+    await pins.nth(i).dispatchEvent('click');
+    hit = await A.waitForSelector('#clOnly', { timeout: 1500 }).then(() => true, () => false);
+    if (hit && JSON.stringify(await A.$$eval('#sheet .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name).sort())) !== JSON.stringify(jeju)) { hit = false; await A.click('#scrim', { position: { x: 10, y: 10 } }); await A.waitForTimeout(300); }
+  }
+  if (!hit) console.log('MAP DEBUG', JSON.stringify({ jeju, pins: await pins.count(), cnt: await A.$$eval('.pin .cnt', c => c.map(x => x.textContent)), zoom: await A.evaluate(() => window.__moa.S.map?.getZoom()), sheet: await A.$$eval('#sheet .tile', t => t.map(x => window.__moa.S.index.photos[x.dataset.id].name)), open: await A.evaluate(() => document.querySelector('#scrim').className) }));
+  ok(hit, 'tapping a group of pins opens its photos with "Show only these"');
+  if (SHOTS && hit) await A.screenshot({ path: `${SHOTS}/22-map-area.png` });
+  if (hit) {
+    await A.click('#clOnly');
+    await A.waitForSelector('#chips .chip.scope');
+    const inArea = await tileNames();
+    ok(JSON.stringify(inArea) === JSON.stringify(jeju), `only the photos taken there are shown (${inArea})`);
+    await A.click('#chips .chip.scope');
+    ok(!(await A.isVisible('#chips .chip.scope')) && (await tileNames()).length === Object.keys(readIndex().photos).length, 'removing the place chip shows everything again');
+  }
+
+  // stats: photos per month; a bar opens that month
+  await A.click('[data-tab=settings]');
+  await A.click('#tab-settings [data-act=stats]');
+  await A.waitForSelector('.vbar[data-month="2024-05"]');
+  const may = Object.values(readIndex().photos).filter(p => (p.takenAt || '').startsWith('2024-05')).length;
+  ok((await A.getAttribute('.vbar[data-month="2024-05"]', 'aria-label')).includes(`${may} photo`), `stats: photos per month (May 2024: ${may})`);
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/23-stats.png` }); }
+  await A.click('.vbar[data-month="2024-05"]');
+  await A.waitForSelector('#chips .chip.scope');
+  ok((await tileNames()).length === may, 'tapping a month shows just its photos');
+  await A.click('#chips .chip.scope');
+
+  // album cover picker
+  await A.click('[data-tab=albums]');
+  await A.click('[data-album]');
+  await A.click('[data-act=albumMenu]');
+  await A.click('#albumCover');
+  const pick2 = await A.getAttribute('.pick-grid .tile:not(.current)', 'data-id');
+  await A.click(`.pick-grid .tile[data-id="${pick2}"]`);
+  await settle();
+  ok(Object.values(readIndex().albums).some(a => a.cover === pick2), 'album cover picked from its photos');
+  await A.click('[data-act=backAlbums]');
+
+  // replace IMG_0004 with another file: marks, cover, date and place stay; the old files go
+  await A.click('[data-tab=photos]');
+  await A.click(`#content .tile[data-id="${shib.id}"]`);
+  await A.click('[data-v=info]');
+  const [chooser] = await Promise.all([A.waitForEvent('filechooser'), A.click('[data-i=replace]')]);
+  await chooser.setFiles([files[1]]);
+  await A.waitForSelector('#rpGo');
+  ok(!(await A.isChecked('#rpMeta')) && !(await A.isChecked('#rpPurge')), 'replace keeps the date and place unless asked; history erase off by default');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/24-replace.png` });
+  const oldShib = byName('IMG_0004.JPG');
+  await A.click('#rpGo');
+  await until(() => readIndex().photos[shib.id]?.name === 'IMG_0002.JPG', 150000);
+  const rep = readIndex().photos[shib.id];
+  ok(rep.tags.includes('⭐') && rep.takenAt === oldShib.takenAt && rep.gps.lat === oldShib.gps.lat && readIndex().cover === shib.id, 'replaced photo keeps its marks, date, place and main-photo spot');
+  ok(!C.filesOf(oldShib).some(f => RA.paths().includes(f)) && C.filesOf(rep).every(f => RA.paths().includes(f)), 'the old files are removed and the new ones stored');
+  await A.click('[data-v=info]');
+  await A.click('[data-v=close]');
+
+  // home screen shows the main photo
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=home]');
+  ok(await A.waitForSelector('[data-repo="alice/moa-spring-trip"] .album-dot.has-cover img', { timeout: 10000 }).then(() => true, () => false), 'home screen shows each album\'s main photo');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/25-home-cover.png` });
+  await A.click('[data-repo="alice/moa-spring-trip"]');
+  await A.waitForSelector('#content .tile', { timeout: 20000 });
+
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 
   // sign-out revokes the grant and forgets the token
@@ -746,6 +928,29 @@ try {
   ok(await Cp.isDisabled('#upGo') && await Cp.isVisible('#upAck'), 'upload past the 10GB guidance needs an explicit acknowledgement');
   await Cp.check('#upAck');
   ok(!(await Cp.isDisabled('#upGo')), 'acknowledging enables the upload button');
+
+  // the app is closed mid-upload: reopening the album picks the upload back up, and says so when done
+  await ctxC.grantPermissions(['notifications']);
+  await ctxC.route(`http://localhost:${API_PORT + 1}/**/git/blobs`, async r => { await new Promise(res => setTimeout(res, 600)); r.continue(); });
+  const tilesBefore = await Cp.locator('#content .tile').count();
+  await Cp.click('#upGo');
+  await Cp.waitForFunction(() => window.__moa.queued().then(n => n === 1), null, { timeout: 10000 });
+  // pretend the app is in the background, and record notifications (headless Chromium can't display them)
+  await ctxC.addInitScript(() => {
+    Object.defineProperty(document, 'hidden', { get: () => true });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
+    Object.defineProperty(Notification, 'permission', { get: () => 'granted' }); // headless Chromium always denies
+    window.__notes = [];
+    ServiceWorkerRegistration.prototype.showNotification = function (title, o) { window.__notes.push(`${title}: ${o.body}`); return Promise.resolve(); };
+  });
+  await Cp.reload();
+  ok(Object.keys(readIndex(LR).photos).length === 1, 'nothing was committed before the app closed');
+  await Cp.waitForFunction(n => document.querySelectorAll('#content .tile').length === n + 1, tilesBefore, { timeout: 60000 });
+  ok(Object.values(readIndex(LR).photos).some(p => p.name === 'IMG_0001.JPG'), 'reopening the album finished the upload from the saved queue');
+  await Cp.waitForFunction(() => window.__moa.queued().then(n => n === 0), null, { timeout: 10000 });
+  ok(true, 'queue emptied once the photo landed');
+  const notes = await Cp.evaluate(() => window.__notes);
+  ok(notes.some(b => /Uploaded 1/.test(b)), `a system notification says the upload finished (${JSON.stringify(notes)})`);
   if (SHOTS) { await Cp.waitForTimeout(500); await Cp.screenshot({ path: `${SHOTS}/12-upload-over-limit.png` }); }
   legacy.server.close();
 } finally {

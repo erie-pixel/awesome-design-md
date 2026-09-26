@@ -1,12 +1,20 @@
 {
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/((?!js/ai-worker\\.js).*)",
       "headers": [
         { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://tile.openstreetmap.org https://github.com https://avatars.githubusercontent.com; media-src 'self' blob:; connect-src 'self' https://api.github.com https://nominatim.openstreetmap.org; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+      ]
+    },
+    {
+      "source": "/js/ai-worker.js",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co; worker-src 'self'" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
       ]
     },
     { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }

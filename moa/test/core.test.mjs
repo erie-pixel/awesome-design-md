@@ -316,7 +316,7 @@ test('i18n: every string has both languages and matching variables', () => {
 
 test('i18n: every t() key used in the app exists', async () => {
   const fs = await import('node:fs');
-  const src = ['app.js', 'media.js', 'github.js', 'crypto.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
+  const src = ['app.js', 'media.js', 'github.js', 'crypto.js', 'ai.js'].map(f => fs.readFileSync(new URL('../js/' + f, import.meta.url), 'utf8')).join('\n')
     + fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   // literal keys only (dynamic ones like t('opt.' + key) are skipped)
   const used = new Set([...src.matchAll(/\bt\('([\w.]*\w)'(?!\s*\+)/g), ...src.matchAll(/data-i18n(?:-aria|-ph)?="([\w.]+)"/g)].map(m => m[1]));
@@ -382,6 +382,95 @@ test('removedFiles: files of photos a newer index no longer has', () => {
   assert.deepEqual(C.removedFiles(null, after), []);
 });
 
+test('removedFiles / replacedFiles: a replaced photo gives up only the files it no longer uses', () => {
+  const ix = { photos: { a: { id: 'a', files: { thumb: 't/a', preview: 'p/a', original: 'o/a' } } } };
+  const op = { op: 'replacePhoto', id: 'a', set: { files: { thumb: 't/a2', preview: 'p/a2' } } };
+  assert.deepEqual(C.replacedFiles(ix, op).sort(), ['o/a', 'p/a', 't/a']);
+  assert.deepEqual(C.replacedFiles(ix, { ...op, id: 'gone' }), []);
+  const after = C.applyOp(structuredClone(ix), op);
+  assert.deepEqual(C.removedFiles(ix, after).sort(), ['o/a', 'p/a', 't/a']);
+});
+
+test('replacePhoto: new file, same photo — tags, albums, likes, comments, caption stay; AI tags and place are redone', () => {
+  const ix = C.emptyIndex();
+  ix.albums.x = { id: 'x', name: 'Trip', cover: 'a' };
+  ix.photos.a = { id: 'a', kind: 'photo', name: 'old.jpg', hash: 'h1', w: 10, h: 10, files: { thumb: 't/a', original: 'o/a' }, sizes: { thumb: 1 }, camera: { model: 'Old' },
+    takenAt: '2024-05-04T06:12:09', gps: { lat: 1, lng: 2 }, place: { city: 'Jeju' }, tags: ['⭐', 'beach'], albums: ['x'], likes: ['bob'], comments: [{ id: 'c' }], caption: 'hi', ai: ['ocean'], aiv: 1 };
+  C.applyOp(ix, { op: 'replacePhoto', id: 'a', at: 'T', by: 'alice', set: { kind: 'photo', name: 'new.jpg', hash: 'h2', w: 20, h: 30, files: { thumb: 't/b' }, sizes: { thumb: 2 } } });
+  const p = ix.photos.a;
+  assert.equal(p.name, 'new.jpg'); assert.equal(p.hash, 'h2'); assert.equal(p.w, 20);
+  assert.deepEqual(p.files, { thumb: 't/b' });
+  assert.equal(p.camera, undefined, 'the old camera belongs to the old file');
+  assert.deepEqual([p.tags, p.albums, p.likes, p.caption, p.comments.length], [['⭐', 'beach'], ['x'], ['bob'], 'hi', 1]);
+  assert.equal(p.takenAt, '2024-05-04T06:12:09'); assert.deepEqual(p.place, { city: 'Jeju' }, 'date and place stay unless asked');
+  assert.equal(p.ai, undefined);
+  assert.equal(ix.albums.x.cover, 'a', 'still the album cover');
+  C.applyOp(ix, { op: 'replacePhoto', id: 'a', set: { files: { thumb: 't/c' }, gps: { lat: 5, lng: 6 } } });
+  assert.deepEqual(p.gps, { lat: 5, lng: 6 }); assert.equal(p.place, undefined, 'a new place is looked up again');
+});
+
+test('setCover: an album cover, or the main photo for the whole album; deleting it falls back', () => {
+  const ix = C.emptyIndex();
+  ix.albums.x = { id: 'x', name: 'Trip' };
+  ix.photos.a = { id: 'a' }; ix.photos.b = { id: 'b' };
+  C.applyOp(ix, { op: 'setCover', album: 'x', photo: 'a' });
+  C.applyOp(ix, { op: 'setCover', photo: 'b' });
+  assert.equal(ix.albums.x.cover, 'a'); assert.equal(ix.cover, 'b');
+  C.applyOp(ix, { op: 'deletePhotos', ids: ['a', 'b'] });
+  assert.equal(ix.albums.x.cover, undefined); assert.equal(ix.cover, undefined);
+});
+
+test('symbol tags: marks are told apart from words, offered in one tap, and suggested while typing', () => {
+  for (const m of ['⭐', '✈️', '🍽️', '♥', '👨‍👩‍👧']) assert.ok(C.isSymbolTag(m), m);
+  for (const w of ['beach', '바다', '2024', 'a⭐', '', '⭐ ⭐']) assert.ok(!C.isSymbolTag(w), w);
+  const list = [{ tags: ['🥐', 'x'] }, { tags: ['🥐'] }];
+  const q = C.quickSymbols(list);
+  assert.equal(q[0], '🥐', 'marks this album already uses come first');
+  assert.equal(q.length, 8);
+  assert.ok(q.includes('⭐'));
+  assert.deepEqual(C.suggestTags('여행', ['여행지', '제주']).slice(0, 2), ['✈️', '여행지']);
+  assert.ok(C.suggestTags('맛', []).includes('🍽️'));
+  assert.ok(C.suggestTags('trip', []).includes('✈️'));
+  assert.deepEqual(C.suggestTags('', ['a']), []);
+  assert.equal(C.groupByTag([{ id: 'a', tags: ['⭐'] }])[0].title, '⭐');
+});
+
+test('area and month filters: map bounds (across the date line too) and capture month', () => {
+  const ps = [
+    { id: 'jeju', gps: { lat: 33.45, lng: 126.94 }, takenAt: '2024-05-04T06:00:00', place: { city: 'Seogwipo' } },
+    { id: 'seoul', gps: { lat: 37.58, lng: 126.97 }, takenAt: '2024-05-06T11:00:00', place: { city: 'Seoul' } },
+    { id: 'fiji', gps: { lat: -17.7, lng: 178.1 }, takenAt: '2023-12-24T21:00:00' },
+    { id: 'samoa', gps: { lat: -13.8, lng: -171.8 }, takenAt: '2023-12-25T09:00:00' },
+    { id: 'nogps', takenAt: '2024-05-01T09:00:00' },
+  ];
+  const ids = f => C.filterPhotos(ps, f).map(p => p.id);
+  assert.deepEqual(ids({ area: { s: 33, n: 34, w: 126, e: 127 } }), ['jeju']);
+  assert.deepEqual(ids({ area: { s: -20, n: -10, w: 170, e: -165 } }), ['fiji', 'samoa'], 'w > e wraps the date line');
+  assert.deepEqual(ids({ month: '2024-05' }), ['jeju', 'seoul', 'nogps']);
+  assert.deepEqual(C.areaName(ps.slice(0, 2)), { name: 'Seogwipo', more: 1 });
+  assert.equal(C.areaName(ps.slice(2)), null);
+});
+
+test('photoStats: per month (by year), weekday, hour, people, places', () => {
+  const ps = [
+    { by: 'alice', takenAt: '2024-05-04T06:12:09', gps: {}, place: { country: 'KR', city: 'Jeju' } },  // Saturday
+    { by: 'alice', takenAt: '2024-05-05T18:00:00', kind: 'video', place: { country: 'KR', city: 'Jeju' } },
+    { by: 'bob', takenAt: '2023-12-24T21:30:12', files: { live: 'x' }, tags: ['⭐'] },
+    { by: 'bob', uploadedAt: '2024-06-01T00:00:00' },
+  ];
+  const st = C.photoStats(ps);
+  assert.deepEqual([st.total, st.photos, st.videos, st.lives, st.located, st.undated], [4, 3, 1, 1, 1, 1]);
+  assert.deepEqual(st.years.map(y => [y.year, y.total]), [['2023', 1], ['2024', 2]]);
+  assert.equal(st.years[1].months[4], 2);
+  assert.equal(st.years[1].months.length, 12);
+  assert.deepEqual(st.busiest, ['2024-05', 2]);
+  assert.equal(st.weekdays[6], 1); assert.equal(st.weekdays[0], 2, '2024-05-05 and 2023-12-24 were Sundays');
+  assert.equal(st.hours[6], 1); assert.equal(st.hours[21], 1);
+  assert.deepEqual(st.people, [['alice', 2], ['bob', 2]]);
+  assert.deepEqual(st.places.map(p => [p.title, p.n]), [['Jeju', 2]]);
+  assert.deepEqual(st.tags, [['⭐', 1]]);
+});
+
 test('crypto: recovery code opens the album when the passphrase is lost; a device can set a new one', async () => {
   const { header, key } = await K.createAlbumKey('forgotten passphrase', { iterations: 1000 });
   const code = K.newRecoveryCode();
@@ -400,4 +489,60 @@ test('crypto: recovery code opens the album when the passphrase is lost; a devic
   await assert.rejects(K.unlockAlbumKey(h2, 'forgotten passphrase'), K.BadPassphrase);
   assert.deepEqual([...await K.open(await K.unlockAlbumKey(h2, 'brand new passphrase'), file)], [7, 8, 9]);
   assert.deepEqual([...await K.open(await K.unlockWithRecovery(h2, code), file)], [7, 8, 9]);
+});
+
+test('filterPhotos: photos-only leaves videos out', () => {
+  const list = [{ id: 'a', kind: 'photo' }, { id: 'b', kind: 'video' }, { id: 'c', kind: 'photo', files: { live: 'x' } }];
+  assert.deepEqual(C.filterPhotos(list, { kind: 'photo' }).map(p => p.id), ['a', 'c']);
+  assert.deepEqual(C.filterPhotos(list, { kind: 'video' }).map(p => p.id), ['b']);
+});
+
+import { ZipWriter, crc32 } from '../js/zip.js';
+test('zip: CRC-32 check value, unique names, readable archive layout', async () => {
+  assert.equal(crc32(new TextEncoder().encode('123456789')).toString(16), 'cbf43926');
+  const z = new ZipWriter();
+  await z.add('사진.jpg', new Blob([new Uint8Array([1, 2, 3])]), new Date(2024, 4, 4));
+  await z.add('사진.jpg', new Blob(['x']));
+  const u8 = new Uint8Array(await z.build().arrayBuffer());
+  const dv = new DataView(u8.buffer);
+  assert.equal(dv.getUint32(0, true), 0x04034b50);
+  const end = u8.length - 22;
+  assert.equal(dv.getUint32(end, true), 0x06054b50);
+  assert.equal(dv.getUint16(end + 10, true), 2);
+  assert.ok(new TextDecoder().decode(u8).includes('사진 (2).jpg'));
+});
+
+import * as AIL from '../js/ai-labels.js';
+test('ai: tags from similarities — confident labels only, at most three; background wins → none', () => {
+  const dim = AIL.LABELS.length + AIL.BACKGROUND.length;
+  const one = i => { const v = new Float32Array(dim); v[i] = 1; return v; };
+  const labels = AIL.LABELS.map((_, i) => one(i));
+  const bg = AIL.BACKGROUND.map((_, i) => one(AIL.LABELS.length + i));
+  const food = AIL.LABELS.findIndex(l => l.key === 'food'), beach = AIL.LABELS.findIndex(l => l.key === 'beach');
+  assert.deepEqual(AIL.pickTags(one(food), labels, bg), ['food']);
+  const mix = new Float32Array(dim); mix[food] = 0.7; mix[beach] = 0.7;
+  assert.deepEqual(AIL.pickTags(mix, labels, bg).sort(), ['beach', 'food']);
+  assert.deepEqual(AIL.pickTags(one(AIL.LABELS.length), labels, bg), [], 'a plain photo gets no forced label');
+  assert.equal(AIL.labelName('ocean', 'ko'), '바다');
+  assert.equal(AIL.labelName('ocean', 'en'), 'Sea');
+});
+
+test('ai: Korean search words become English for CLIP; unknown Korean falls back to plain search', () => {
+  assert.equal(AIL.toEnglishQuery('dog on the beach'), 'dog on the beach');
+  assert.equal(AIL.toEnglishQuery('바다에서 노을'), 'the ocean a sunset');
+  assert.equal(AIL.toEnglishQuery('강아지 beach'), 'a dog beach');
+  assert.equal(AIL.toEnglishQuery('제주도'), null);
+  assert.equal(AIL.toEnglishQuery('  '), null);
+});
+
+test('ai: auto-tag ops, filter, counts and plain search over tag names', () => {
+  const ix = C.emptyIndex();
+  ix.photos = { a: { id: 'a', kind: 'photo' }, b: { id: 'b', kind: 'photo' } };
+  C.applyOps(ix, [{ op: 'aiTags', id: 'a', tags: ['ocean', 'beach'], v: 1 }, { op: 'aiTags', id: 'b', tags: [], v: 1 }]);
+  assert.deepEqual(ix.photos.a.ai, ['ocean', 'beach']);
+  assert.deepEqual(C.aiTagCounts(Object.values(ix.photos)), [['ocean', 1], ['beach', 1]]);
+  assert.deepEqual(C.filterPhotos(Object.values(ix.photos), { ai: 'ocean' }).map(p => p.id), ['a']);
+  assert.deepEqual(C.filterPhotos(Object.values(ix.photos), { q: '바다' }).map(p => p.id), ['a']);
+  C.applyOp(ix, { op: 'aiClear' });
+  assert.ok(!ix.photos.a.ai && !ix.photos.b.aiv);
 });

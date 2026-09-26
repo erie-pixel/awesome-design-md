@@ -1,0 +1,1 @@
+{"model_type": "clip", "projection_dim": 512, "text_config": {"model_type": "clip_text_model"}, "vision_config": {"model_type": "clip_vision_model", "image_size": 224, "patch_size": 32}}

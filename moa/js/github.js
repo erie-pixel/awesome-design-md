@@ -72,7 +72,7 @@ export class Repo {
     this.api = (api || 'https://api.github.com').replace(/\/+$/, '');
     this.onWait = null;     // (seconds) => void, API rate-limit notice
     this.onThrottle = null; // (seconds) => void, push-rate pacing notice
-    this.pushTimes = [];
+    this.pushTimes = this.loadPushes(); // survives a reload, so reopening the app can't burst past the pace
     this._inflight = 0;
     this._queue = [];
     this.header = null;     // wrapped-key header when the album is encrypted
@@ -232,7 +232,13 @@ export class Repo {
   }
 
   /** Wait until another ref update fits in GitHub's recommended push rate. */
+  get pushKey() { return `moa.pushes.${this.owner}/${this.repo}`.toLowerCase(); }
+  loadPushes() {
+    try { return (JSON.parse(globalThis.localStorage?.getItem(this.pushKey)) || []).filter(t => Date.now() - t < 60000); } catch { return []; }
+  }
+
   async gate() {
+    this.pushTimes = [...new Set([...this.pushTimes, ...this.loadPushes()])].sort((a, b) => a - b); // other tabs of this album count too
     for (;;) {
       const ms = waitFor(this.pushTimes, Date.now());
       if (!ms) break;
@@ -241,6 +247,7 @@ export class Repo {
     }
     this.pushTimes.push(Date.now());
     this.pushTimes = this.pushTimes.filter(t => Date.now() - t < 60000);
+    try { globalThis.localStorage?.setItem(this.pushKey, JSON.stringify(this.pushTimes)); } catch { /* private mode */ }
   }
 
   recentPushes() { return this.pushTimes.filter(t => Date.now() - t < 60000).length; }

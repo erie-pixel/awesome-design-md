@@ -186,6 +186,12 @@ export function applyOp(ix, op) {
         if (ix.cover === id) delete ix.cover;
       }
       break;
+    case 'trashPhotos': // recently deleted: hidden, files kept, gone for good after TRASH_DAYS
+      each(op.ids, p => { p.trashedAt = op.at; p.trashedBy = op.by; });
+      break;
+    case 'restorePhotos':
+      each(op.ids, p => { delete p.trashedAt; delete p.trashedBy; });
+      break;
     case 'replacePhoto': // a new file in the same place: tags, albums, likes, comments and caption stay
       each([op.id], p => {
         for (const k of REPLACED) delete p[k];
@@ -230,6 +236,19 @@ export function applyOp(ix, op) {
 }
 
 export function applyOps(ix, ops) { for (const op of ops) applyOp(ix, op); return ix; }
+
+// ---------------- recently deleted ----------------
+
+export const TRASH_DAYS = 30;
+export const isTrashed = p => !!p?.trashedAt;
+const DAY = 86400000;
+/** Whole days left before a trashed photo is deleted for good (0 = due). */
+export function trashDaysLeft(p, now = Date.now()) {
+  const t = Date.parse(p.trashedAt);
+  return Number.isFinite(t) ? Math.max(0, Math.ceil((t + TRASH_DAYS * DAY - now) / DAY)) : 0;
+}
+/** Trashed photos whose 30 days are up. */
+export const trashDue = (list, now = Date.now()) => list.filter(p => isTrashed(p) && trashDaysLeft(p, now) === 0).map(p => p.id);
 
 /** Repository paths a delete op should remove. */
 export function filesOf(p) {
@@ -722,19 +741,36 @@ export function storageBytes(list) {
   return list.reduce((s, p) => s + Object.values(p.sizes || {}).reduce((a, b) => a + (b || 0), 0), 0);
 }
 
-/** Grid-based marker clustering in pixel space. project: ({lat,lng}) → {x,y}. */
-export function clusterPoints(list, project, cell = 64) {
-  const cells = new Map();
-  for (const p of list) {
-    if (!p.gps) continue;
-    const pt = project(p.gps);
-    const k = Math.floor(pt.x / cell) + ':' + Math.floor(pt.y / cell);
-    if (!cells.has(k)) cells.set(k, { photos: [], lat: 0, lng: 0 });
-    const c = cells.get(k);
-    c.photos.push(p); c.lat += p.gps.lat; c.lng += p.gps.lng;
+/**
+ * Marker clustering by distance in pixel space. project: ({lat,lng}) → {x,y}.
+ * Each photo joins the nearest group started within `radius` px, else starts its own
+ * (newest photos start groups, so pins don't jump around as older ones load).
+ * Unlike a fixed grid, two photos a few pixels apart never split just because a cell
+ * border happens to run between them. A coarse grid of seeds keeps it near O(n).
+ */
+export function clusterPoints(list, project, radius = 64) {
+  const pts = list.filter(p => p.gps).map(p => ({ p, ...project(p.gps) }));
+  pts.sort((a, b) => sortTs(b.p) - sortTs(a.p));
+  const groups = [], seeds = new Map(), r2 = radius * radius;
+  for (const q of pts) {
+    const cx = Math.floor(q.x / radius), cy = Math.floor(q.y / radius);
+    let best = null, bd = r2;
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      for (const g of seeds.get(`${cx + i}:${cy + j}`) || []) {
+        const d = (g.x - q.x) ** 2 + (g.y - q.y) ** 2;
+        if (d <= bd) { bd = d; best = g; }
+      }
+    }
+    if (!best) {
+      best = { x: q.x, y: q.y, photos: [], lat: 0, lng: 0 };
+      groups.push(best);
+      const k = `${cx}:${cy}`;
+      if (!seeds.has(k)) seeds.set(k, []);
+      seeds.get(k).push(best);
+    }
+    best.photos.push(q.p);
+    best.lat += q.p.gps.lat;
+    best.lng += q.p.gps.lng;
   }
-  return [...cells.values()].map(c => {
-    c.photos.sort((a, b) => sortTs(b) - sortTs(a));
-    return { lat: c.lat / c.photos.length, lng: c.lng / c.photos.length, photos: c.photos };
-  });
+  return groups.map(g => ({ lat: g.lat / g.photos.length, lng: g.lng / g.photos.length, photos: g.photos }));
 }

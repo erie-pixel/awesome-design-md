@@ -16,6 +16,7 @@ import * as Q from './queue.js';
 import { ZipWriter } from './zip.js';
 import * as AI from './ai.js';
 import { AI_VERSION, labelName, toEnglishQuery } from './ai-labels.js';
+import { WHATS_NEW, LATEST, newSince } from './whatsnew.js';
 import { t, setLang, lang, locale, fmtDay, fmtMonth, fmtTime } from './i18n.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -32,6 +33,7 @@ const ICON = {
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7zM19 15c.25 2 1 2.75 3 3-2 .25-2.75 1-3 3-.25-2-1-2.75-3-3 2-.25 2.75-1 3-3z"/></svg>',
   github: '<svg class="faceid" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5.5 7l1 12a2 2 0 0 0 2 1.8h7a2 2 0 0 0 2-1.8l1-12M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   gauge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></svg>',
   faceid: '<svg class="faceid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 16a4 4 0 0 0 5 0"/></svg>',
@@ -41,6 +43,8 @@ const ICON = {
 // ---------------- persistence ----------------
 
 const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite', passkey: id => 'moa.passkey.' + id };
+// read before anything below writes: had this device used Moa before this version?
+const RETURNING = (() => { try { return (JSON.parse(localStorage.getItem('moa.spaces')) || []).length > 0 || !!localStorage.getItem('moa.seen'); } catch { return false; } })();
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
@@ -61,7 +65,9 @@ const S = {
   initPass: null,
 };
 
-const photos = () => Object.values(S.index?.photos || {});
+const photos = () => Object.values(S.index?.photos || {}).filter(p => !C.isTrashed(p)); // what the album shows
+const trashed = () => Object.values(S.index?.photos || {}).filter(C.isTrashed);
+const shown = id => { const p = S.index?.photos[id]; return p && !C.isTrashed(p) ? p : null; };
 const saveSpaces = () => save(LS.spaces, S.spaces);
 const savePending = () => S.space && save(LS.pending(S.space.id), S.pending);
 
@@ -643,6 +649,8 @@ async function openSpace(sp, { initTitle, initPass, initVault = true } = {}) {
     setSync(S.pending.length ? 'pending' : null);
     if (S.pending.length) scheduleFlush(500);
     resumeUploads();
+    emptyDueTrash();
+    setTimeout(whatsNew, 900); // once the album is on screen
     if (prefs.ai) aiStart();
   } catch (e) {
     if (S.space !== sp) return;
@@ -726,6 +734,7 @@ function edit(op) {
   savePending();
   scheduleFlush();
   rerender();
+  if (op.op === 'trashPhotos' || op.op === 'deletePhotos') { if (!$('#viewer').hidden) refreshViewer(); } // on to the next photo
 }
 
 function scheduleFlush(ms = 2500) {
@@ -738,7 +747,7 @@ function scheduleFlush(ms = 2500) {
 function describe(ops) {
   const n = ops.length;
   const kinds = [...new Set(ops.map(o => o.op))];
-  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title', replacePhoto: 'replace photo' };
+  const names = { tag: 'tags', like: 'likes', comment: 'comment', uncomment: 'remove comment', updatePhoto: 'photo info', deletePhotos: 'delete photos', createAlbum: 'new album', renameAlbum: 'rename album', deleteAlbum: 'delete album', albumMembership: 'album photos', setCover: 'album cover', join: 'join', setTitle: 'title', replacePhoto: 'replace photo', trashPhotos: 'move to Recently deleted', restorePhotos: 'restore' };
   return `Moa: ${kinds.map(k => names[k] || k).join(', ')}${n > 1 ? ` (${n})` : ''}${S.me?.login ? ` — @${S.me.login}` : ''}`;
 }
 
@@ -944,7 +953,7 @@ function currentList() {
   const sem = S.semantic;
   if (!S.filter.q || !sem || sem.q !== S.filter.q) return list;
   const have = new Set(list.map(p => p.id));
-  const extra = C.filterPhotos(sem.ids.map(id => S.index.photos[id]).filter(Boolean), f).filter(p => !have.has(p.id));
+  const extra = C.filterPhotos(sem.ids.map(shown).filter(Boolean), f).filter(p => !have.has(p.id));
   return [...list, ...extra];
 }
 
@@ -1182,7 +1191,7 @@ function openClusterSheet(list, { area = null, zoom = null } = {}) {
 
 function albumCover(a, id) {
   const inAlbum = photos().filter(p => (p.albums || []).includes(id)).sort((x, y) => C.sortTs(y) - C.sortTs(x));
-  const cover = (a.cover && S.index.photos[a.cover]) || inAlbum[0];
+  const cover = (a.cover && shown(a.cover)) || inAlbum[0];
   return { cover, count: inAlbum.length };
 }
 
@@ -1205,12 +1214,13 @@ function renderAlbums() {
       ${S.canWrite ? `<button class="album-card new" data-act="newAlbum"><div class="cover">${ICON.plus}</div><b>${t('newAlbum.title')}</b><span>&nbsp;</span></button>` : ''}
       ${albums.map(([id, a]) => { const { cover, count } = albumCover(a, id); return card(`${coverHTML(cover)}<b>${esc(a.name)}</b><span>${count}</span>`, `data-album="${esc(id)}"`); }).join('')}
     </div>
-    ${smart.length || places || tags ? `<h2 class="section-title">${t('smart.title')}</h2>` : ''}
+    ${smart.length || places || tags || all.length || trashed().length ? `<h2 class="section-title">${t('smart.title')}</h2>` : ''}
     <div class="albums">
       ${smart.map(([k, name, l]) => card(`${coverHTML(newest(l))}<b>${name}</b><span>${l.length}</span>`, `data-smart="${k}"`)).join('')}
       ${places ? card(`${coverHTML(newest(all.filter(p => p.place)))}<b>${t('smart.places')}</b><span>${places}</span>`, 'data-smart="place"') : ''}
       ${tags ? card(`${coverHTML(all.find(p => p.tags?.length))}<b>${t('smart.tags')}</b><span>${tags}</span>`, 'data-smart="tag"') : ''}
       ${all.length ? card(`<div class="cover stats-cover">${statsSpark(all)}</div><b>${t('stats.title')}</b><span>${t('n.photos', { n: all.length })}</span>`, 'data-act="stats"') : ''}
+      ${trashed().length ? card(`<div class="cover trash-cover">${ICON.trash}</div><b>${t('trash.title')}</b><span>${trashed().length}</span>`, 'data-act="trash"') : ''}
     </div>`;
   observeThumbs(el);
 }
@@ -1300,7 +1310,7 @@ function settingsHome() {
     <h2 class="section-title">${t('set.album')}</h2>
     <div class="panel">
       ${S.canWrite ? `<button class="row row-btn" data-act="rename"><span class="grow"><b>${t('newAlbum.name')}</b><small>${esc(S.index.title || '')}</small></span><span class="text-btn">${t('common.edit')}</span></button>` : `<div class="row"><div class="grow"><b>${esc(S.index.title || '')}</b><small>${t('set.readonly')}</small></div></div>`}
-      ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && S.index.photos[S.index.cover] ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
+      ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && shown(S.index.cover) ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
       ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
       ${all.length ? `<button class="row row-btn" data-act="downloadAll"><span class="grow"><b>${t('dl.all')}</b><small>${t('n.photos', { n: all.length })}</small></span><span class="val">›</span></button>` : ''}
     </div>
@@ -1357,6 +1367,7 @@ function settingsApp() {
     </div>
     <h2 class="section-title">${t('appset.device')}</h2>
     <div class="panel">
+      <button class="row row-btn" data-act="whatsNew"><span class="grow"><b>${t('wn.title')}</b><small>${t('wn.sub', { d: fmtDate(WHATS_NEW[0].date) })}</small></span><span class="val">›</span></button>
       <button class="row row-btn" data-act="clearCache"><span class="grow"><b>${t('set.clearCache')}</b><small>${t('set.clearCacheSub')} <span id="cacheSize"></span></small></span></button>
     </div>
     <p class="set-note">${t('appset.note')}</p>`;
@@ -1682,8 +1693,11 @@ function hbarsHTML(rows) {
 
 /** Tiny last-12-months bars for the Collections card. */
 function statsSpark(list) {
-  const now = new Date(), keys = [];
-  for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
+  // the album's own last 12 months (ending at its newest photo), so an older album isn't a flat line
+  const last = list.map(p => (p.takenAt || '').slice(0, 7)).filter(m => /^\d{4}-\d{2}$/.test(m)).sort().pop();
+  const [y, m] = (last || new Date().toISOString().slice(0, 7)).split('-').map(Number);
+  const keys = [];
+  for (let i = 11; i >= 0; i--) { const d = new Date(y, m - 1 - i, 1); keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
   const n = keys.map(k => list.filter(p => (p.takenAt || '').startsWith(k)).length);
   const max = Math.max(1, ...n);
   return `<svg viewBox="0 0 120 80" aria-hidden="true">${n.map((v, i) => { const h = Math.max(2, (v / max) * 60); return `<rect x="${6 + i * 9.4}" y="${70 - h}" width="6.6" height="${h}" rx="2"/>`; }).join('')}</svg>`;
@@ -1803,7 +1817,7 @@ const COVERS = 'moa.covers'; // album id → thumbnail path, so the home screen 
 
 function libraryCover() {
   const ix = S.index;
-  return (ix?.cover && ix.photos[ix.cover]) || photos().sort((a, b) => C.sortTs(b) - C.sortTs(a))[0] || null;
+  return (ix?.cover && shown(ix.cover)) || photos().sort((a, b) => C.sortTs(b) - C.sortTs(a))[0] || null;
 }
 
 function rememberCover() {
@@ -1895,17 +1909,112 @@ function tagSheet(ids) {
   inp.onkeydown = e => { if (e.key === 'Enter') ok(); };
 }
 
+/** Delete = move to Recently deleted (30 days), unless "Delete now" is on. */
 function deletePhotos(ids, after) {
   const sh = openSheet(`<h2>${t('delete.confirm', { n: ids.length })}</h2>
-    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="delPurge"><span></span></label></div>
+    <p class="sheet-p" id="delNote">${t('trash.note', { d: C.TRASH_DAYS })}</p>
+    <div class="row opt-row"><div class="grow"><b>${t('trash.now')}</b></div><label class="switch"><input type="checkbox" id="delNow"><span></span></label></div>
+    <div class="row opt-row" id="delPurgeRow" hidden><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="delPurge"><span></span></label></div>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="delOk">${t('common.delete')}</button></div>`);
+  $('#delNow', sh).onchange = e => {
+    $('#delPurgeRow', sh).hidden = !e.target.checked;
+    $('#delNote', sh).textContent = e.target.checked ? t('trash.nowNote') : t('trash.note', { d: C.TRASH_DAYS });
+  };
   $('#delOk', sh).onclick = () => {
-    const purge = $('#delPurge', sh).checked;
+    const now = $('#delNow', sh).checked, purge = now && $('#delPurge', sh).checked;
     closeSheet();
-    edit({ op: 'deletePhotos', ids });
+    if (now) edit({ op: 'deletePhotos', ids });
+    else { edit({ op: 'trashPhotos', ids, at: new Date().toISOString(), by: S.me?.login || '' }); toast(t('trash.moved', { n: ids.length })); }
     after?.();
     if (purge) eraseHistory();
   };
+}
+
+// ---------------- what's new (once per update) ----------------
+
+const SEEN_VERSION = 'moa.seenVersion';
+
+function whatsNewHTML(releases) {
+  const i = lang() === 'ko' ? 1 : 0;
+  return releases.map(r => `<section class="wn"><h4 class="sheet-h4">${fmtDate(r.date)}</h4><ul>${r.items.map(it => `<li>${esc(it[i])}</li>`).join('')}</ul></section>`).join('');
+}
+
+/** After an update, once: what changed since this device last looked. New users just start at the latest. */
+function whatsNew() {
+  const seen = load(SEEN_VERSION, null);
+  if (seen === null) {
+    // a person who used Moa before this note existed still hears about the latest release
+    save(SEEN_VERSION, RETURNING ? LATEST - 1 : LATEST);
+    if (load(SEEN_VERSION, LATEST) === LATEST) return;
+  }
+  const fresh = newSince(load(SEEN_VERSION, LATEST));
+  if (!fresh.length || sheetOpen() || U.running || CONV.running || !S.index) return;
+  const sh = openSheet(`<h2>${t('wn.title')}</h2>${whatsNewHTML(fresh)}
+    <button class="btn btn-primary btn-block" data-close style="margin-top:16px">${t('wn.ok')}</button>`, { kind: 'whatsnew', onClose: () => save(SEEN_VERSION, LATEST) });
+  return sh;
+}
+
+function whatsNewAll() {
+  save(SEEN_VERSION, LATEST);
+  openSheet(`<h2>${t('wn.title')}</h2>${whatsNewHTML(WHATS_NEW)}<button class="btn btn-primary btn-block" data-close style="margin-top:16px">${t('wn.ok')}</button>`, { kind: 'whatsnew' });
+}
+
+// ---------------- recently deleted ----------------
+
+function trashSheet() {
+  const list = trashed().sort((a, b) => (b.trashedAt || '').localeCompare(a.trashedAt || ''));
+  if (!list.length) { closeSheet(); return toast(t('trash.empty')); }
+  const w = S.canWrite, picked = new Set();
+  const sh = openSheet(`<h2>${t('trash.title')} <small>${t('n.photos', { n: list.length })}</small></h2>
+    <p class="sheet-p">${t('trash.body', { d: C.TRASH_DAYS })}</p>
+    <div class="grid trash-grid${w ? ' selecting' : ''}" style="margin:0 -20px">${list.map(p => tileHTML(p).replace('<span class="check"></span>', `<span class="days">${t('trash.days', { n: C.trashDaysLeft(p) })}</span><span class="check"></span>`)).join('')}</div>
+    ${w ? `<div class="actions"><button class="btn btn-quiet" id="trRestore">${t('trash.restoreAll')}</button><button class="btn btn-danger" id="trDelete">${t('trash.deleteAll')}</button></div>` : ''}`, { kind: 'trash' });
+  observeThumbs(sh);
+  const label = () => {
+    if (!w) return;
+    $('#trRestore', sh).textContent = picked.size ? t('trash.restoreN', { n: picked.size }) : t('trash.restoreAll');
+    $('#trDelete', sh).textContent = picked.size ? t('trash.deleteN', { n: picked.size }) : t('trash.deleteAll');
+  };
+  sh.onclick = e => {
+    const tile = e.target.closest('.tile');
+    if (tile && w) {
+      const id = tile.dataset.id;
+      picked.has(id) ? picked.delete(id) : picked.add(id);
+      tile.classList.toggle('sel', picked.has(id));
+      return label();
+    }
+    const ids = () => (picked.size ? [...picked] : list.map(p => p.id));
+    if (e.target.closest('#trRestore')) {
+      const n = ids().length;
+      edit({ op: 'restorePhotos', ids: ids() });
+      toast(t('trash.restored', { n }));
+      return setTimeout(trashSheet, 120);
+    }
+    if (e.target.closest('#trDelete')) return deleteForGood(ids());
+  };
+}
+
+/** Out of the trash for good: the files go too (and, if asked, the history). */
+function deleteForGood(ids) {
+  const sh = openSheet(`<h2>${t('trash.forGood', { n: ids.length })}</h2><p class="sheet-p">${t('trash.forGoodBody')}</p>
+    <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="fgPurge"><span></span></label></div>
+    <div class="actions"><button class="btn btn-quiet" id="fgBack">${t('common.cancel')}</button><button class="btn btn-danger" id="fgOk">${t('common.delete')}</button></div>`, { kind: 'trash' });
+  $('#fgBack', sh).onclick = () => trashSheet();
+  $('#fgOk', sh).onclick = () => {
+    const purge = $('#fgPurge', sh).checked;
+    edit({ op: 'deletePhotos', ids });
+    closeSheet();
+    toast(t('trash.deleted', { n: ids.length }));
+    if (purge) eraseHistory();
+  };
+}
+
+/** Anything past its 30 days is deleted for good the next time a member who can edit opens the album. */
+function emptyDueTrash() {
+  if (!S.canWrite || !S.index) return;
+  const pendingGone = new Set(S.pending.filter(o => o.op === 'deletePhotos').flatMap(o => o.ids));
+  const due = C.trashDue(trashed()).filter(id => !pendingGone.has(id));
+  if (due.length) edit({ op: 'deletePhotos', ids: due });
 }
 
 // ---------------- erase history · encryption ----------------
@@ -2534,7 +2643,7 @@ function currentPhoto() { return S.index?.photos[V.list[V.i]] || null; }
 
 function refreshViewer() {
   // the photo might have been deleted by a friend
-  V.list = V.list.filter(id => S.index.photos[id]);
+  V.list = V.list.filter(shown);
   if (!V.list.length) return closeViewer();
   V.i = Math.min(V.i, V.list.length - 1);
   const p = currentPhoto();
@@ -2938,13 +3047,15 @@ async function handleFiles(fileList) {
   }
   const entries = buildEntries(items);
   const hashes = new Set(photos().map(p => p.hash).filter(Boolean));
+  const binned = new Set(trashed().map(p => p.hash).filter(Boolean)); // already stored, just in the trash
   const seen = new Set();
   for (const e of entries) {
-    e.dup = !!e.main.hash && (hashes.has(e.main.hash) || seen.has(e.main.hash));
+    const inTrash = !!e.main.hash && binned.has(e.main.hash);
+    e.dup = !!e.main.hash && (hashes.has(e.main.hash) || inTrash || seen.has(e.main.hash));
     if (e.main.hash) seen.add(e.main.hash);
     e.skip = !!e.main.error || e.dup;
     e.main.tooBig = !!e.main.tooBig;
-    e.status = e.skip ? (e.main.error ? { k: 'err', text: e.main.error } : { k: 'dup' }) : null;
+    e.status = e.skip ? (e.main.error ? { k: 'err', text: e.main.error } : { k: inTrash ? 'trash' : 'dup' }) : null;
   }
   U.entries = entries;
   showUploadSheet(true);
@@ -3512,6 +3623,8 @@ function bind() {
       case 'mapAt': S.view = 'map'; S.mapFocus = [+b.dataset.lat, +b.dataset.lng]; return render();
       case 'invite': return inviteSheet();
       case 'mainCover': return mainCoverSheet();
+      case 'trash': return trashSheet();
+      case 'whatsNew': return whatsNewAll();
       case 'setBack': S.setPage = null; renderSettings(); window.scrollTo(0, 0); return;
       case 'stats': return showStats();
       case 'purge': return purgeSheet();

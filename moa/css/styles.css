@@ -632,6 +632,16 @@ details.more[open] > summary { margin-bottom: 12px; }
 #suAiInfo { margin: -6px 4px 12px; }
 #suAiInfo .consent-h { list-style: none; margin-left: -18px; font-weight: 600; color: var(--ink-2); }
 
+/* ---------------- recently deleted ---------------- */
+.trash-cover { background: var(--card) !important; color: var(--muted); }
+.trash-cover svg { width: 38px !important; height: 38px !important; }
+.tile .days { position: absolute; left: 6px; bottom: 6px; font-size: 11px; font-weight: 600; color: #fff; background: rgba(0, 0, 0, .45); padding: 2px 6px; border-radius: 9999px; font-variant-numeric: tabular-nums; }
+.trash-grid .tile img { opacity: .85; }
+.trash-grid .tile .fav, .trash-grid .tile .marks { display: none; }
+
+.wn ul { margin: 0 4px 6px; padding-left: 20px; }
+.wn li { font-size: 15px; line-height: 1.5; color: var(--ink-2); margin-bottom: 6px; list-style: none; text-indent: -20px; }
+
 @media (prefers-reduced-motion: reduce) {
   /* keep fades that explain state; drop movement */
   .sheet, .scrim.open .sheet, .select-bar, .toast, .v-info, .seg-thumb, .tab-thumb, .switch span::after, .tile, .tile img, .v-media { transition-property: opacity, background-color, color !important; }

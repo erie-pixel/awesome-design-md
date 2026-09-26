@@ -610,3 +610,31 @@ test('recovery vault: the text file names the album and carries a code Moa can r
   assert.equal(G.vaultCode(null), null);
   assert.equal(G.vaultPath('Alice', 'Moa-6Z301U'), 'recovery/alice/moa-6z301u.txt');
 });
+
+test('clusterPoints: nearby photos group by distance, even across what used to be a grid border', () => {
+  const at = (id, x, ts) => ({ id, gps: { lat: 0, lng: x }, takenAt: ts });
+  const proj = g => ({ x: g.lng, y: 0 });
+  const cl = C.clusterPoints([at('a', 63, '2024-01-02T00:00:00'), at('b', 65, '2024-01-01T00:00:00'), at('c', 300, '2024-01-03T00:00:00')], proj, 64);
+  assert.equal(cl.length, 2);
+  const ab = cl.find(g => g.photos.length === 2);
+  assert.deepEqual(ab.photos.map(p => p.id), ['a', 'b'], 'newest first inside a group');
+  assert.equal(ab.lng, 64);
+  // a long chain doesn't snowball into one pin: each group stays within the radius of where it started
+  const chain = Array.from({ length: 10 }, (_, i) => at('p' + i, i * 40, `2024-01-${String(10 + i).padStart(2, '0')}T00:00:00`));
+  assert.ok(C.clusterPoints(chain, proj, 64).length >= 4);
+});
+
+test('trash: photos are hidden but kept, restored, and due for good after 30 days', () => {
+  const ix = C.emptyIndex();
+  ix.photos.a = { id: 'a', files: { thumb: 't/a' } };
+  ix.photos.b = { id: 'b', files: { thumb: 't/b' } };
+  C.applyOp(ix, { op: 'trashPhotos', ids: ['a', 'b'], at: '2026-09-01T00:00:00Z', by: 'alice' });
+  assert.ok(C.isTrashed(ix.photos.a) && ix.photos.a.trashedBy === 'alice' && ix.photos.a.files.thumb === 't/a', 'the files stay while it is in the trash');
+  const now = Date.parse('2026-09-21T00:00:00Z');
+  assert.equal(C.trashDaysLeft(ix.photos.a, now), 10);
+  assert.deepEqual(C.trashDue(Object.values(ix.photos), now), []);
+  assert.deepEqual(C.trashDue(Object.values(ix.photos), Date.parse('2026-10-01T00:00:01Z')).sort(), ['a', 'b']);
+  C.applyOp(ix, { op: 'restorePhotos', ids: ['b'] });
+  assert.ok(!C.isTrashed(ix.photos.b) && ix.photos.b.trashedBy === undefined);
+});
+

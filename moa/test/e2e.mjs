@@ -12,6 +12,7 @@ import { withExif } from './fixtures.mjs';
 import * as oauth from '../server/oauth.js';
 import * as K from '../js/crypto.js';
 import * as C from '../js/core.js';
+import { LATEST } from '../js/whatsnew.js';
 
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch { ({ chromium } = await import('/opt/node22/lib/node_modules/playwright/index.mjs')); }
@@ -406,7 +407,9 @@ try {
   await A.click('[data-v=info]');
   await A.click('[data-i=delete]');
   await A.waitForSelector('#delOk');
-  ok(!(await A.isChecked('#delPurge')), 'delete sheet offers "Also erase from history", off by default');
+  ok(!(await A.isChecked('#delNow')) && (await A.textContent('#delNote')).includes('30 days'), 'delete goes to Recently deleted unless "Delete now" is on');
+  await A.click('#delNow + span');
+  ok(await A.isVisible('#delPurgeRow') && !(await A.isChecked('#delPurge')), 'deleting now offers "Also erase from history", off by default');
   RA.dropFile(victim.files.preview); // already gone from the repository: GitHub would refuse the whole tree ("Invalid tree info")
   await A.click('#delOk');
   await A.evaluate(() => window.__moa.flush());
@@ -577,6 +580,7 @@ try {
   await A.click(`#content .tile[data-id="${encVictim.id}"]`);
   await A.click('[data-v=info]');
   await A.click('[data-i=delete]');
+  await A.click('#delNow + span');
   await A.click('#delPurge + span');
   await A.click('#delOk');
   await until(() => !RE.paths().includes(encVictim.files.live) && RE.history().length === 1, 150000);
@@ -899,7 +903,11 @@ try {
   await A.waitForSelector('#mapArea');
   const gpsCount = Object.values(readIndex().photos).filter(p => p.gps).length;
   ok((await A.textContent('#mapArea')).includes(`${gpsCount} photo`), `map offers "photos in this area" (${await A.textContent('#mapArea')})`);
-  // Jeju and Seoul share one pin when zoomed out to Korea (pins group by grid cell)
+  // pins group by distance: the two Jeju photos (a few pixels apart at this zoom) share one, Seoul stays apart
+  const jejuPair = Object.values(readIndex().photos).filter(p => p.gps && p.gps.lat > 33 && p.gps.lat < 34).length;
+  await A.evaluate(() => window.__moa.S.map.setView([34.5, 128.5], 5, { animate: false }));
+  ok(await A.waitForFunction(n => [...document.querySelectorAll('.pin .cnt')].some(c => +c.textContent === n), jejuPair, { timeout: 3000 }).then(() => true, () => false), `photos taken close together share a pin (${jejuPair} in Jeju at zoom 5)`);
+  // Jeju and Seoul share one pin when zoomed out to Korea
   const jeju = Object.values(readIndex().photos).filter(p => p.gps && p.gps.lat > 33 && p.gps.lat < 38.5 && p.gps.lng > 124 && p.gps.lng < 130).map(p => p.name).sort();
   for (const z of [4, 3]) {
     await A.evaluate(z => window.__moa.S.map.setView([34.5, 128.5], z, { animate: false }), z);
@@ -972,6 +980,54 @@ try {
   if (SHOTS) await A.screenshot({ path: `${SHOTS}/25-home-cover.png` });
   await A.click('[data-repo="alice/moa-spring-trip"]');
   await A.waitForSelector('#content .tile', { timeout: 20000 });
+
+  // ---------- recently deleted: kept 30 days, restorable, then gone for good ----------
+  const palace = byName('IMG_0003.JPG');
+  await A.click('[data-tab=photos]');
+  await A.click(`#content .tile[data-id="${palace.id}"]`);
+  await A.click('[data-v=info]');
+  await A.click('[data-i=delete]');
+  await A.click('#delOk');
+  await A.keyboard.press('Escape'); // info panel
+  await A.keyboard.press('Escape'); // viewer
+  await A.waitForSelector('#viewer', { state: 'hidden' });
+  await settle();
+  ok(readIndex().photos[palace.id]?.trashedAt && C.filesOf(palace).every(f => RA.paths().includes(f)), 'a deleted photo goes to Recently deleted with its files kept');
+  ok(!(await A.locator(`#content .tile[data-id="${palace.id}"]`).count()), 'it disappears from the library');
+  await A.click('[data-tab=albums]');
+  await A.click('[data-act=trash]');
+  await A.waitForSelector(`.trash-grid .tile[data-id="${palace.id}"]`);
+  ok((await A.textContent(`.trash-grid .tile[data-id="${palace.id}"] .days`)).trim() === '30d', 'Recently deleted shows the days left');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/27-trash.png` }); }
+  await A.click(`.trash-grid .tile[data-id="${palace.id}"]`);
+  ok((await A.textContent('#trRestore')).includes('Restore 1'), 'picking photos in the trash');
+  await A.click('#trRestore');
+  await settle();
+  ok(!readIndex().photos[palace.id].trashedAt, 'restored from Recently deleted');
+  await A.click('#scrim', { position: { x: 10, y: 10 } }).catch(() => {});
+  // 30 days later (the entry is aged on GitHub): the next member to open the album deletes it for good
+  await A.click('[data-tab=photos]');
+  await A.click(`#content .tile[data-id="${palace.id}"]`);
+  await A.click('[data-v=info]');
+  await A.click('[data-i=delete]');
+  await A.click('#delOk');
+  await A.keyboard.press('Escape');
+  await A.keyboard.press('Escape');
+  await A.waitForSelector('#viewer', { state: 'hidden' });
+  await settle();
+  RA.commitJson(C.shardOf(readIndex().photos[palace.id]), j => { j.photos[palace.id].trashedAt = '2020-01-01T00:00:00Z'; });
+  await A.reload();
+  await until(() => !readIndex().photos[palace.id] && !C.filesOf(palace).some(f => RA.paths().includes(f)), 60000);
+  ok(true, 'after 30 days the photo and its files are deleted for good');
+
+  // ---------- what's new, once after an update ----------
+  await A.evaluate(v => localStorage.setItem('moa.seenVersion', String(v - 1)), LATEST);
+  await A.reload();
+  await A.waitForSelector('#sheet .wn', { timeout: 20000 });
+  ok((await A.textContent('#sheet')).includes('Recently deleted'), 'after an update, "What\'s new" shows what changed');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/28-whats-new.png` });
+  await A.click('#sheet [data-close]');
+  ok(Number(await A.evaluate(() => localStorage.getItem('moa.seenVersion'))) === LATEST, 'and only once');
 
   for (const u of ['alice', 'bob']) ok(api.maxPushesPerMinute(u) <= 6, `@${u} stayed within 6 pushes/minute per repository (peak ${api.maxPushesPerMinute(u)})`);
 

@@ -546,3 +546,67 @@ test('ai: auto-tag ops, filter, counts and plain search over tag names', () => {
   C.applyOp(ix, { op: 'aiClear' });
   assert.ok(!ix.photos.a.ai && !ix.photos.b.aiv);
 });
+
+test('crypto: Face ID passkey slot (WebAuthn PRF) opens the album; other keys and cancels don\'t', async () => {
+  // stand-in authenticator: each credential's PRF is HMAC-SHA-256(its secret, salt)
+  const creds = new Map();
+  let present = null, cancel = false, prfOnCreate = false;
+  const hmac = async (secret, salt) => new Uint8Array(await crypto.subtle.sign('HMAC', await crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']), salt));
+  const reply = async (rawId, salt) => ({ rawId: rawId.buffer, getClientExtensionResults: () => ({ prf: { enabled: true, ...(salt && { results: { first: salt } }) } }) });
+  const fake = {
+    async create({ publicKey }) {
+      if (cancel) throw Object.assign(new Error('no'), { name: 'NotAllowedError' });
+      const rawId = crypto.getRandomValues(new Uint8Array(16));
+      creds.set(Buffer.from(rawId).toString('hex'), crypto.getRandomValues(new Uint8Array(32)));
+      present = rawId;
+      return reply(rawId, prfOnCreate ? await hmac(creds.get(Buffer.from(rawId).toString('hex')), publicKey.extensions.prf.eval.first) : null);
+    },
+    async get({ publicKey }) {
+      if (cancel) throw Object.assign(new Error('no'), { name: 'NotAllowedError' });
+      const hex = Buffer.from(present).toString('hex');
+      if (!publicKey.allowCredentials.some(c => Buffer.from(c.id).toString('hex') === hex)) throw Object.assign(new Error('none'), { name: 'NotAllowedError' });
+      return reply(present, await hmac(creds.get(hex), publicKey.extensions.prf.eval.first));
+    },
+  };
+  Object.defineProperty(globalThis.navigator, 'credentials', { value: fake, configurable: true });
+  try {
+    const { header, key } = await K.createAlbumKey('pass phrase!', { iterations: 1000 });
+    const a = await K.addPasskey(header, key, { label: 'iPhone', by: 'alice' });
+    assert.equal(K.passkeySlots(a.header).length, 1);
+    assert.equal(K.passkeySlots(a.header)[0].label, 'iPhone');
+    const opened = await K.unlockWithPasskey(a.header);
+    assert.equal(opened.id, a.id);
+    assert.equal(await K.keyToText(opened.key), await K.keyToText(key));
+    prfOnCreate = true; // browsers that hand out the secret right at creation
+    const b = await K.addPasskey(a.header, key, { label: 'Mac', by: 'alice' });
+    assert.equal(K.passkeySlots(b.header).length, 2);
+    assert.equal(b.header.passkeys.salt, a.header.passkeys.salt, 'one salt per album');
+    assert.equal(await K.keyToText((await K.unlockWithPasskey(b.header)).key), await K.keyToText(key));
+    // the passphrase keeps working, and changing it keeps the passkeys
+    const re = await K.rewrapAlbumKey(b.header, 'pass phrase!', 'new phrase!!');
+    assert.equal(K.passkeySlots(re).length, 2);
+    assert.equal(await K.keyToText((await K.unlockWithPasskey(re)).key), await K.keyToText(key));
+    // a tampered slot doesn't open; cancelling isn't an error to show
+    const bad = structuredClone(b.header);
+    bad.passkeys.slots[1].wrapped.data = bad.passkeys.slots[0].wrapped.data;
+    await assert.rejects(K.unlockWithPasskey(bad), K.BadPassphrase);
+    cancel = true;
+    await assert.rejects(K.unlockWithPasskey(b.header), e => e instanceof K.NoPasskey && e.message === 'cancelled');
+    cancel = false;
+    const gone = K.removePasskey(K.removePasskey(b.header, a.id), b.id);
+    assert.equal(gone.passkeys, undefined);
+    await assert.rejects(K.unlockWithPasskey(gone), K.NoPasskey);
+  } finally { delete globalThis.navigator.credentials; }
+});
+
+
+test('recovery vault: the text file names the album and carries a code Moa can read back', async () => {
+  const G = await import('../js/github.js');
+  const code = K.newRecoveryCode();
+  const text = G.vaultText({ album: 'alice/moa-6z301u', title: '비밀 여행', code, at: '2026-09-26T00:00:00Z' });
+  assert.match(text, /Album: alice\/moa-6z301u \(비밀 여행\)/);
+  assert.equal(G.vaultCode(text), code);
+  assert.equal(G.vaultCode('Code: nope'), null);
+  assert.equal(G.vaultCode(null), null);
+  assert.equal(G.vaultPath('Alice', 'Moa-6Z301U'), 'recovery/alice/moa-6z301u.txt');
+});

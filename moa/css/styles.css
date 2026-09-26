@@ -596,6 +596,16 @@ button.map-note:disabled { color: var(--muted); font-weight: 400; }
 .replace-pair img.ok { opacity: 1; }
 .replace-pair figcaption { font-size: 12px; color: var(--muted); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---------------- Face ID unlock ---------------- */
+.faceid { width: 20px; height: 20px; margin-right: 8px; vertical-align: -4px; }
+.or-line { text-align: center; font-size: 13px; color: var(--muted); margin: 12px 0 0; }
+.pk-list { margin: 0 0 12px; }
+.pk-list .row small { color: var(--muted); }
+
+.warn-note { font-size: 13px; color: var(--warn); }
+.vault-opt .grow small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.35; margin-top: 2px; }
+.vault-opt .grow b { display: block; }
+
 @media (prefers-reduced-motion: reduce) {
   /* keep fades that explain state; drop movement */
   .sheet, .scrim.open .sheet, .select-bar, .toast, .v-info, .seg-thumb, .tab-thumb, .switch span::after, .tile, .tile img, .v-media { transition-property: opacity, background-color, color !important; }

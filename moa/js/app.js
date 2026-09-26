@@ -7,8 +7,8 @@
    ============================================================ */
 
 import * as C from './core.js';
-import { Repo, Account, clearMediaCache, textToBase64, ENCRYPTED_DESCRIPTION } from './github.js';
-import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecoveryCode, withRecovery, hasRecovery, unlockWithRecovery, keyToText, keyFromText, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys } from './crypto.js';
+import { Repo, Account, clearMediaCache, textToBase64, ENCRYPTED_DESCRIPTION, vaultText, vaultCode, vaultPath } from './github.js';
+import { createAlbumKey, unlockAlbumKey, rewrapAlbumKey, setPassphrase, newRecoveryCode, withRecovery, hasRecovery, unlockWithRecovery, keyToText, keyFromText, BadPassphrase, rememberKey, recallKey, forgetKey, forgetAllKeys, passkeyAvailable, addPasskey, removePasskey, passkeySlots, unlockWithPasskey, NoPasskey } from './crypto.js';
 import { analyzeFile, buildEntries, makeRenditions } from './media.js';
 import { reverseGeocode, searchPlaces } from './geo.js';
 import * as LIM from './limits.js';
@@ -31,12 +31,14 @@ const ICON = {
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7zM19 15c.25 2 1 2.75 3 3-2 .25-2.75 1-3 3-.25-2-1-2.75-3-3 2-.25 2.75-1 3-3z"/></svg>',
+  github: '<svg class="faceid" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>',
+  faceid: '<svg class="faceid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 16a4 4 0 0 0 5 0"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
 };
 
 // ---------------- persistence ----------------
 
-const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite' };
+const LS = { spaces: 'moa.spaces', current: 'moa.current', prefs: 'moa.prefs', auth: 'moa.auth', pending: id => 'moa.pending.' + id, convert: id => 'moa.convert.' + id, invite: 'moa.invite', passkey: id => 'moa.passkey.' + id };
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota / private mode */ } }
 
@@ -545,8 +547,12 @@ function encFieldsHTML() {
   return `<div class="row opt-row"><div class="grow"><b>${ICON.lock}${t('enc.encrypt')}</b></div><label class="switch"><input type="checkbox" id="encOn"><span></span></label></div>
     <div id="encBox" hidden>
       <label class="field"><span>${t('enc.pass')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
-      <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"><small>${t('enc.lost')}</small></label>
+      <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"></label>
+      ${vaultToggleHTML()}
     </div>`;
+}
+function vaultToggleHTML(on = true) {
+  return `<div class="row opt-row vault-opt"><div class="grow"><b>${t('vault.opt')}</b><small>${t('vault.optNote')}</small></div><label class="switch"><input type="checkbox" id="encVault"${on ? ' checked' : ''}><span></span></label></div>`;
 }
 function bindEncFields(root, onToggle) {
   const on = $('#encOn', root);
@@ -557,7 +563,7 @@ function readEncFields(root) {
   const a = $('#encPass', root).value, b = $('#encPass2', root).value;
   if (a.length < 8) return { error: t('enc.short') };
   if (a !== b) return { error: t('enc.mismatch') };
-  return { pass: a };
+  return { pass: a, vault: !!$('#encVault', root)?.checked };
 }
 
 function newAlbumRepo() {
@@ -587,7 +593,7 @@ function newAlbumRepo() {
     try {
       const r = await account().createAlbumRepo(name, title, { encrypted: !!enc.pass });
       closeSheet();
-      openSpace(spaceFromRepo(r), { initTitle: title, initPass: enc.pass });
+      openSpace(spaceFromRepo(r), { initTitle: title, initPass: enc.pass, initVault: enc.vault });
     } catch (e) {
       err.textContent = e.status === 422 ? t('newAlbum.taken') : errMsg(e);
       err.hidden = false;
@@ -596,13 +602,14 @@ function newAlbumRepo() {
   };
 }
 
-async function openSpace(sp, { initTitle, initPass } = {}) {
+async function openSpace(sp, { initTitle, initPass, initVault = true } = {}) {
   if (!tokenFor(sp)) return S.loginAvailable ? showWelcome() : showWelcome({ join: sp });
   S.space = sp;
   save(LS.current, sp.id);
   S.gh = new Repo({ ...sp, token: tokenFor(sp) });
   S.initTitle = initTitle || null;
   S.initPass = initPass || null;
+  S.initVault = initVault !== false;
   S.gh.onWait = s => toast(t('rate.wait', { s }), 5000);
   // GitHub recommends ≤ 6 pushes/minute per repository; the client paces itself
   S.gh.onThrottle = s => setSync('throttle', s);
@@ -820,7 +827,7 @@ function renderInit(empty) {
     <button class="btn btn-primary btn-block" id="initBtn">${t('init.create')}</button></div></div>`;
   if (!S.gh.sealed) bindEncFields(c);
   $('#initBtn').onclick = () => {
-    const enc = S.initPass ? { pass: S.initPass } : readEncFields(c);
+    const enc = S.initPass ? { pass: S.initPass, vault: S.initVault } : readEncFields(c);
     if (enc.error) { $('#initErr').textContent = enc.error; $('#initErr').hidden = false; return; }
     serial(async () => {
       const btn = $('#initBtn');
@@ -830,13 +837,14 @@ function renderInit(empty) {
       try {
         if (empty) await S.gh.seed('README.md', repoReadme(enc.pass ? null : title), 'Moa: start album');
         const files = [];
-        let recovery = null;
+        let recovery = null, vaultErr = null;
         if (enc.pass && !S.gh.sealed) {
           // album.json carries only the wrapped key; everything else is sealed from the first commit on
           const made = await createAlbumKey(enc.pass);
           const key = made.key;
           recovery = newRecoveryCode();
-          const header = await withRecovery(made.header, key, recovery);
+          let header = await withRecovery(made.header, key, recovery);
+          if (enc.vault) header = await vaultSave(header, recovery, { title }).catch(e => { vaultErr = e; return header; });
           files.push({ path: C.META_PATH, sha: await S.gh.blob(textToBase64(JSON.stringify(header, null, 2) + '\n')) });
           S.gh.setEncryption(header, key);
           S.keys.set(S.space.id, key);
@@ -846,7 +854,7 @@ function renderInit(empty) {
         $('#toolbar').hidden = false;
         adopt(r);
         toast(t('init.done'));
-        if (recovery) recoverySheet(recovery);
+        if (recovery) recoveryDone(recovery, vaultErr);
       } catch (e) {
         btn.disabled = false; btn.textContent = t('init.create');
         toast(errMsg(e), 4000);
@@ -1274,8 +1282,9 @@ function renderSettings() {
       ${S.canWrite && all.length ? `<button class="row row-btn" data-act="mainCover"><span class="cover-thumb">${thumbImg(libraryCover()?.files?.thumb)}</span><span class="grow"><b>${t('cover.main')}</b><small>${t(S.index.cover && S.index.photos[S.index.cover] ? 'cover.chosen' : 'cover.auto')}${S.gh.sealed ? ` · ${t('cover.sealedNote')}` : ''}</small></span><span class="text-btn">${t('cover.change')}</span></button>` : ''}
       ${all.length ? `<button class="row row-btn" data-act="stats"><span class="grow"><b>${t('stats.title')}</b><small>${t('stats.sub')}</small></span><span class="val">›</span></button>` : ''}
       ${S.gh.sealed ? `<div class="row"><span class="lock-badge">${ICON.lock}</span><div class="grow"><b>${t('enc.on')}</b><small>AES-256-GCM</small></div></div>
-      ${S.canWrite ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b></span><span class="val">›</span></button>
-      <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.title')}</b><small>${t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet')}</small></span><span class="val">›</span></button>` : ''}
+      ${isOwner() ? `<button class="row row-btn" data-act="passphrase"><span class="grow"><b>${t('enc.change')}</b><small>${t('enc.ownerOnly')}</small></span><span class="val">›</span></button>
+      <button class="row row-btn" data-act="recovery"><span class="grow"><b>${t('rec.method')}</b><small>${recoveryStatus()}</small></span><span class="val">›</span></button>` : ''}
+      ${S.canWrite ? `<button class="row row-btn" data-act="passkey"><span class="grow"><b>${esc(t('pk.title', { name: bioName() }))}</b><small>${passkeyStatus()}</small></span><span class="val">›</span></button>` : ''}
       <button class="row row-btn" data-act="lockHere"><span class="grow"><b>${t('enc.lockHere')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && !S.gh.sealed ? `<button class="row row-btn" data-act="encryptAlbum"><span class="grow"><b>${ICON.lock}${t(load(LS.convert(S.space.id), null)?.toSealed ? 'conv.resumeEncrypt' : 'conv.encryptTitle')}</b></span><span class="val">›</span></button>` : ''}
       ${isOwner() && S.gh.sealed ? `<button class="row row-btn" data-act="decryptAlbum"><span class="grow"><b>${t(load(LS.convert(S.space.id), null)?.toSealed === false ? 'conv.resumeDecrypt' : 'conv.decryptTitle')}</b></span><span class="val">›</span></button>` : ''}
@@ -1898,19 +1907,67 @@ function recoverySheet(code) {
   };
 }
 
+// ---------------- recovery: a code kept in the owner's own private GitHub repo (default), or by hand ----------------
+
+const myVault = header => { const v = header?.recovery?.vault; return v && S.me?.login && v.owner.toLowerCase() === S.me.login.toLowerCase() ? v : null; };
+function recoveryStatus() {
+  const v = S.gh.header?.recovery?.vault;
+  if (v) return t('vault.status', { repo: `${v.owner}/moa-vault` });
+  return t(hasRecovery(S.gh.header) ? 'rec.set' : 'rec.notSet');
+}
+
+/** Write the recovery code into the signed-in person's private vault repo; the header remembers where. */
+async function vaultSave(header, code, { title = S.index?.title } = {}) {
+  const sp = S.space;
+  const v = await new Account(S.gh.token, S.gh.api).vault(S.me.login, { create: true });
+  const path = vaultPath(sp.owner, sp.repo);
+  await v.writeFiles({ [path]: vaultText({ album: `${sp.owner}/${sp.repo}`, title, code, at: new Date().toISOString() }) }, `Moa: recovery code for ${sp.owner}/${sp.repo}`);
+  return { ...header, recovery: { ...header.recovery, vault: { owner: v.owner, path } } };
+}
+
+/** Read the code back from the vault (only its owner's token can). */
+async function vaultRead(vault) {
+  const v = await new Account(S.gh.token, S.gh.api).vault(vault.owner);
+  const code = v && vaultCode(await v.readText(vault.path));
+  if (!code) throw new Error(t('vault.missing'));
+  return code;
+}
+
+async function vaultForget(vault) {
+  try { const v = await new Account(S.gh.token, S.gh.api).vault(vault.owner); if (v && await v.readText(vault.path) != null) await v.writeFiles({ [vault.path]: null }, 'Moa: remove recovery code'); } catch { /* the album no longer points at it anyway */ }
+}
+
+/** After a code is made: say where it went, or hand it over when it's kept by hand. */
+function recoveryDone(code, vaultErr) {
+  const v = S.gh.header?.recovery?.vault;
+  if (!v) { recoverySheet(code); if (vaultErr) toast(t('vault.failed', { e: errMsg(vaultErr) }), 5000); return; }
+  const sh = openSheet(`<h2>${t('vault.savedTitle')}</h2>
+    <p class="sheet-p">${t('vault.savedBody', { repo: `<b>${esc(v.owner)}/moa-vault</b>` })}</p>
+    <p class="sheet-p warn-note">${t('vault.tradeoff')}</p>
+    <div class="actions"><button class="btn btn-quiet" id="vdShow">${t('vault.showCode')}</button><button class="btn btn-primary" data-close>${t('common.done')}</button></div>`, { kind: 'recovery' });
+  $('#vdShow', sh).onclick = () => recoverySheet(code);
+}
+
 function newRecoverySheet() {
-  const had = hasRecovery(S.gh.header);
-  const sh = openSheet(`<h2>${t('rec.title')}</h2><p class="sheet-p">${t(had ? 'rec.replace' : 'rec.none')}</p>
+  if (!isOwner()) return toast(t('enc.ownerOnly'));
+  const had = hasRecovery(S.gh.header), inVault = !!S.gh.header?.recovery?.vault;
+  const sh = openSheet(`<h2>${t('rec.method')}</h2>
+    <p class="sheet-p">${inVault ? t('vault.status', { repo: `<b>${esc(S.gh.header.recovery.vault.owner)}/moa-vault</b>` }) + ' · ' : ''}${t(had ? 'rec.replace' : 'rec.none')}</p>
+    ${vaultToggleHTML(inVault || !had)}
     ${had ? `<div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="rcPurge" checked><span></span></label></div>` : ''}
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="rcNew">${t(had ? 'rec.new' : 'rec.create')}</button></div>`);
   $('#rcNew', sh).onclick = async () => {
     const btn = $('#rcNew', sh);
     btn.disabled = true;
-    const purge = !!$('#rcPurge', sh)?.checked;
+    const purge = !!$('#rcPurge', sh)?.checked, toVault = $('#encVault', sh).checked;
+    const old = S.gh.header?.recovery?.vault;
     try {
       const code = newRecoveryCode();
-      await saveHeader(await withRecovery(S.gh.header, S.gh.key, code), 'Moa: new recovery code');
-      recoverySheet(code);
+      let header = await withRecovery(S.gh.header, S.gh.key, code), vaultErr = null;
+      if (toVault) header = await vaultSave(header, code).catch(e => { vaultErr = e; return header; });
+      await saveHeader(header, 'Moa: new recovery code');
+      if (old && !header.recovery.vault) vaultForget(old);
+      recoveryDone(code, vaultErr);
       if (purge) eraseHistory(); // the old code's copy of the key stays in history until erased
     } catch (e) { btn.disabled = false; toast(errMsg(e), 4000); }
   };
@@ -1918,6 +1975,7 @@ function newRecoverySheet() {
 
 /** forgot: this device holds the key, so the old passphrase isn't needed. */
 function passphraseSheet({ forgot = false, title } = {}) {
+  if (!isOwner()) return toast(t('enc.ownerOnly'));
   const sh = openSheet(`<h2>${title || t('enc.change')}</h2>
     <label class="field" id="ppOldBox"${forgot ? ' hidden' : ''}><span>${t('enc.current')}</span><input id="ppOld" type="password" autocomplete="current-password"></label>
     ${forgot ? '' : `<button class="text-btn forgot" id="ppForgot">${t('lock.forgot')}</button>`}
@@ -1979,7 +2037,7 @@ function convertProgress(toSealed) {
   $('#cvBar', sh).style.transform = `scaleX(${CONV.total ? CONV.done / CONV.total : 0})`;
 }
 
-async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
+async function convertAlbum(toSealed, { pass = null, purge = true, vault = true } = {}) {
   if (CONV.running || U.running) return toast(t('up.busy'));
   const sp = S.space, gh = S.gh;
   let job = load(LS.convert(sp.id), null);
@@ -1993,7 +2051,9 @@ async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
         if (!pass) { localStorage.removeItem(LS.convert(sp.id)); throw new Error(t('conv.restart')); }
         const made = await createAlbumKey(pass);
         const recovery = newRecoveryCode();
-        job = { toSealed, header: await withRecovery(made.header, made.key, recovery), recovery, map: {} };
+        let header = await withRecovery(made.header, made.key, recovery), vaultErr = null;
+        if (vault) header = await vaultSave(header, recovery).catch(e => { vaultErr = errMsg(e); return header; });
+        job = { toSealed, header, recovery, vaultErr, map: {} };
         key = made.key;
         await rememberKey('convert:' + sp.id, key);
         save(LS.convert(sp.id), job);
@@ -2041,7 +2101,7 @@ async function convertAlbum(toSealed, { pass = null, purge = true } = {}) {
     ringDone();
     toast(t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
     notify(S.index?.title || 'Moa', t(toSealed ? 'conv.encrypted' : 'conv.decrypted'));
-    if (toSealed) recoverySheet(job.recovery); else closeSheet();
+    if (toSealed) recoveryDone(job.recovery, job.vaultErr); else closeSheet();
     // encrypting only helps once the plain copies are gone from history too
     if (toSealed || purge) await eraseHistory();
     rerender();
@@ -2060,7 +2120,8 @@ function encryptAlbumSheet() {
   if (load(LS.convert(S.space.id), null)?.toSealed) return convertAlbum(true);
   const sh = openSheet(`<h2>${t('conv.encryptTitle')}</h2><p class="sheet-p">${t('conv.encryptBody')}</p>
     <label class="field"><span>${t('enc.pass')}</span><input id="encPass" type="password" autocomplete="new-password"></label>
-    <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"><small>${t('enc.lost')}</small></label>
+    <label class="field"><span>${t('enc.pass2')}</span><input id="encPass2" type="password" autocomplete="new-password"></label>
+    ${vaultToggleHTML()}
     <p class="err" id="cvErr" hidden></p>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-primary" id="cvGo">${t('conv.encrypt')}</button></div>`);
   setTimeout(() => $('#encPass', sh).focus(), 50);
@@ -2068,7 +2129,7 @@ function encryptAlbumSheet() {
     const a = $('#encPass', sh).value, err = $('#cvErr', sh);
     if (a.length < 8) { err.textContent = t('enc.short'); err.hidden = false; return; }
     if (a !== $('#encPass2', sh).value) { err.textContent = t('enc.mismatch'); err.hidden = false; return; }
-    convertAlbum(true, { pass: a });
+    convertAlbum(true, { pass: a, vault: $('#encVault', sh).checked });
   };
 }
 
@@ -2078,6 +2139,71 @@ function decryptAlbumSheet() {
     <div class="row opt-row"><div class="grow"><b>${t('purge.also')}</b></div><label class="switch"><input type="checkbox" id="cvPurge" checked><span></span></label></div>
     <div class="actions"><button class="btn btn-quiet" data-close>${t('common.cancel')}</button><button class="btn btn-danger" id="cvGo">${t('conv.decrypt')}</button></div>`);
   $('#cvGo', sh).onclick = () => convertAlbum(false, { purge: $('#cvPurge', sh).checked });
+}
+
+// ---------------- Face ID / Touch ID: a passkey that opens an encrypted album ----------------
+
+const IS_IOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+function bioName() {
+  const ua = navigator.userAgent;
+  if (IS_IOS()) return 'Face ID';
+  if (/Macintosh/.test(ua)) return 'Touch ID';
+  if (/Windows/.test(ua)) return 'Windows Hello';
+  if (/Android/.test(ua)) return t('pk.android');
+  return t('pk.generic');
+}
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (IS_IOS()) return 'iPad';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'Windows';
+  return t('pk.device');
+}
+const myPasskey = () => { const id = load(LS.passkey(S.space.id), null); return passkeySlots(S.gh.header).find(x => x.id === id) || null; };
+function passkeyStatus() {
+  const n = passkeySlots(S.gh.header).length;
+  return myPasskey() ? t('pk.onHere', { n }) : n ? t('pk.others', { n }) : t('pk.off');
+}
+
+async function passkeySheet() {
+  const slots = passkeySlots(S.gh.header), mine = myPasskey(), name = bioName();
+  const ok = await passkeyAvailable();
+  const sh = openSheet(`<h2>${esc(t('pk.title', { name }))}</h2>
+    <p class="sheet-p">${esc(t('pk.body', { name }))}</p>
+    ${slots.length ? `<div class="panel pk-list">${slots.map(x => `<div class="row"><span class="grow"><b>${esc(x.label || t('pk.device'))}${x.id === mine?.id ? ` · ${t('pk.thisDevice')}` : ''}</b><small>@${esc(x.by || '')} · ${fmtDate(x.at)}</small></span>${S.canWrite ? `<button class="text-btn danger" data-pk-del="${esc(x.id)}">${t('common.delete')}</button>` : ''}</div>`).join('')}</div>` : ''}
+    ${!ok ? `<p class="err">${esc(t('pk.unsupported', { name }))}</p>` : ''}
+    <p class="err" id="pkErr" hidden></p>
+    <div class="actions"><button class="btn btn-quiet" data-close>${t('common.close')}</button>${ok && !mine && S.canWrite ? `<button class="btn btn-primary" id="pkAdd">${esc(t('pk.turnOn'))}</button>` : ''}</div>`);
+  const fail = msg => { const e = $('#pkErr', sh); e.textContent = msg; e.hidden = false; };
+  $('#pkAdd', sh)?.addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const { header, id } = await addPasskey(S.gh.header, S.gh.key, { title: S.index?.title || S.space.repo, user: S.me?.login || 'moa', label: deviceLabel(), by: S.me?.login || '' });
+      await saveHeader(header, `Moa: add ${name} unlock`);
+      save(LS.passkey(S.space.id), id);
+      toast(t('pk.added', { name }));
+      closeSheet();
+      rerender();
+    } catch (ex) {
+      btn.disabled = false;
+      if (ex instanceof NoPasskey && ex.message === 'cancelled') return;
+      fail(ex instanceof NoPasskey ? t('pk.unsupported', { name }) : errMsg(ex));
+    }
+  });
+  sh.addEventListener('click', async e => {
+    const b = e.target.closest('[data-pk-del]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      await saveHeader(removePasskey(S.gh.header, b.dataset.pkDel), `Moa: remove ${name} unlock`);
+      toast(t('pk.removed'));
+      passkeySheet();
+      rerender();
+    } catch (ex) { b.disabled = false; fail(errMsg(ex)); }
+  });
 }
 
 function lockHere() {
@@ -2101,8 +2227,10 @@ function renderLocked(header) {
   const c = $('#content');
   c.innerHTML = `<div class="empty locked-album"><div class="lock-hero">${ICON.lock}</div>
     <h2>${t('lock.title')}</h2>
+    <div id="pkUnlockBox" style="max-width:340px;margin:0 auto 14px" hidden><button class="btn btn-primary btn-block" type="button" id="pkUnlock">${ICON.faceid}${esc(t('pk.unlock', { name: bioName() }))}</button><p class="or-line">${t('pk.or')}</p></div>
     <form id="unlockForm" autocomplete="off" style="max-width:340px;margin:0 auto;text-align:left">
       <label class="field" id="unlockPassBox"><span>${t('lock.pass')}</span><input id="unlockPass" type="password" autocomplete="current-password"></label>
+      <div id="vaultBox" hidden><button class="btn btn-primary btn-block" type="button" id="vaultRecover">${ICON.github}${t('vault.recover')}</button><p class="or-line">${t('vault.orCode')}</p></div>
       <label class="field" id="unlockCodeBox" hidden><span>${t('rec.title')}</span><input id="unlockCode" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
       <div class="row opt-row"><div class="grow"><b>${t('lock.remember')}</b></div><label class="switch"><input type="checkbox" id="unlockRemember" checked><span></span></label></div>
       <p class="err" id="unlockErr" hidden></p>
@@ -2111,16 +2239,65 @@ function renderLocked(header) {
     </form></div>`;
   const sp = S.space;
   let viaCode = false;
-  setTimeout(() => $('#unlockPass')?.focus(), 50);
+  const opened = async (key, { remember, recovered = false }) => {
+    if (S.space !== sp) return;
+    S.gh.key = key;
+    S.keys.set(sp.id, key);
+    if (remember) rememberKey(sp.id, key);
+    await serial(() => refresh(true));
+    if (S.space !== sp) return;
+    setSync(S.pending.length ? 'pending' : null);
+    if (S.pending.length) scheduleFlush(500);
+    // opened with the recovery code: the passphrase is lost, so set a new one now
+    if (recovered && isOwner()) passphraseSheet({ forgot: true, title: t('rec.setNew') });
+    else resumeUploads();
+  };
+  // Face ID first when this album has passkeys; the passphrase form stays underneath
+  if (passkeySlots(header).length) passkeyAvailable().then(ok => {
+    if (!ok || S.space !== sp || !$('#pkUnlockBox')) return;
+    $('#pkUnlockBox').hidden = false;
+    $('#pkUnlock').onclick = async () => {
+      const btn = $('#pkUnlock'), err = $('#unlockErr');
+      err.hidden = true;
+      btn.disabled = true;
+      try {
+        const { key, id } = await unlockWithPasskey(header);
+        save(LS.passkey(sp.id), id); // this device (or its synced keychain) holds that passkey
+        await opened(key, { remember: false });
+      } catch (ex) {
+        if (!$('#pkUnlock')) return;
+        btn.disabled = false;
+        // browsers answer "cancelled" and "no such passkey here" the same way, on purpose
+        err.textContent = ex instanceof NoPasskey ? t(ex.message === 'cancelled' ? 'pk.notOpened' : 'pk.notHere', { name: bioName() }) : errMsg(ex);
+        err.hidden = false;
+      }
+    };
+  });
+  setTimeout(() => { if ($('#pkUnlockBox')?.hidden !== false) $('#unlockPass')?.focus(); }, 50);
   $('#unlockForgot').onclick = () => {
     const err = $('#unlockErr');
     if (!hasRecovery(header)) { err.textContent = t('rec.missing'); err.hidden = false; return; }
     viaCode = !viaCode;
     $('#unlockPassBox').hidden = viaCode;
     $('#unlockCodeBox').hidden = !viaCode;
+    $('#vaultBox').hidden = !viaCode || !myVault(header);
     $('#unlockForgot').textContent = t(viaCode ? 'lock.usePass' : 'lock.forgot');
     err.hidden = true;
     $(viaCode ? '#unlockCode' : '#unlockPass').focus();
+  };
+  $('#vaultRecover').onclick = async () => {
+    const btn = $('#vaultRecover'), err = $('#unlockErr');
+    err.hidden = true;
+    btn.disabled = true;
+    try {
+      const key = await unlockWithRecovery(header, await vaultRead(myVault(header)));
+      await opened(key, { remember: $('#unlockRemember').checked, recovered: true });
+    } catch (ex) {
+      if (!$('#vaultRecover')) return;
+      btn.disabled = false;
+      err.textContent = ex instanceof BadPassphrase ? t('vault.stale') : errMsg(ex);
+      err.hidden = false;
+    }
   };
   $('#unlockForm').onsubmit = async e => {
     e.preventDefault();
@@ -2129,17 +2306,7 @@ function renderLocked(header) {
     btn.disabled = true; btn.textContent = t('lock.unlocking');
     try {
       const key = viaCode ? await unlockWithRecovery(header, $('#unlockCode').value) : await unlockAlbumKey(header, $('#unlockPass').value);
-      if (S.space !== sp) return;
-      S.gh.key = key;
-      S.keys.set(sp.id, key);
-      if ($('#unlockRemember').checked) rememberKey(sp.id, key);
-      await serial(() => refresh(true));
-      if (S.space !== sp) return;
-      setSync(S.pending.length ? 'pending' : null);
-      if (S.pending.length) scheduleFlush(500);
-      // opened with the recovery code: the passphrase is lost, so set a new one now
-      if (viaCode && S.canWrite) passphraseSheet({ forgot: true, title: t('rec.setNew') });
-      else resumeUploads();
+      await opened(key, { remember: $('#unlockRemember').checked, recovered: viaCode });
     } catch (ex) {
       if (!$('#unlockBtn')) return;
       btn.disabled = false; btn.textContent = t('lock.unlock');
@@ -3239,6 +3406,7 @@ function bind() {
       case 'encryptAlbum': return encryptAlbumSheet();
       case 'decryptAlbum': return decryptAlbumSheet();
       case 'lockHere': return lockHere();
+      case 'passkey': return passkeySheet();
       case 'storage': showTab('settings'); requestAnimationFrame(() => $('#storageTitle')?.scrollIntoView({ block: 'start' })); return;
       case 'addSpace': return showWelcome({ adding: true });
       case 'home': return showHome();

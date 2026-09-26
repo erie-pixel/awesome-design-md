@@ -638,3 +638,28 @@ test('trash: photos are hidden but kept, restored, and due for good after 30 day
   assert.ok(!C.isTrashed(ix.photos.b) && ix.photos.b.trashedBy === undefined);
 });
 
+test('caption = pinned comment: pin, re-pin, unpin, and deleting the pinned comment clears it', () => {
+  const ix = C.emptyIndex();
+  ix.photos.a = { id: 'a', comments: [{ id: 'c1', by: 'bob', text: '성산 일출!' }, { id: 'c2', by: 'alice', text: '또 가자' }] };
+  C.applyOp(ix, { op: 'pinComment', id: 'a', commentId: 'c1' });
+  assert.deepEqual([ix.photos.a.pinned, ix.photos.a.caption, ix.photos.a.captionBy], ['c1', '성산 일출!', 'bob']);
+  C.applyOp(ix, { op: 'pinComment', id: 'a', commentId: 'c2' });
+  assert.equal(ix.photos.a.caption, '또 가자');
+  C.applyOp(ix, { op: 'uncomment', id: 'a', commentId: 'c2' });
+  assert.equal(ix.photos.a.caption, undefined);
+  assert.equal(ix.photos.a.pinned, undefined);
+  ix.photos.a.caption = 'legacy caption';
+  C.applyOp(ix, { op: 'pinComment', id: 'a', commentId: null });
+  assert.equal(ix.photos.a.caption, undefined);
+  assert.ok(C.filterPhotos([{ ...ix.photos.a, caption: '일출' }], { q: '일출' }).length === 1, 'the caption is still searchable');
+});
+
+test('setLive: motion added to a still photo later', () => {
+  const ix = C.emptyIndex();
+  ix.photos.a = { id: 'a', files: { thumb: 't', original: 'o' }, sizes: { thumb: 1 } };
+  C.applyOp(ix, { op: 'setLive', id: 'a', path: 'media/x.live.mov', mime: 'video/quicktime', size: 99 });
+  assert.deepEqual(ix.photos.a.files, { thumb: 't', original: 'o', live: 'media/x.live.mov' });
+  assert.equal(ix.photos.a.sizes.live, 99);
+  assert.ok(C.filesOf(ix.photos.a).includes('media/x.live.mov'));
+});
+

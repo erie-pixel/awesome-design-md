@@ -181,7 +181,7 @@ svg { display: block; }
 .search-row input { width: 100%; border: 0; background: var(--chip); border-radius: var(--r-md); padding: 10px 14px; outline: none; }
 
 /* segmented control with a sliding thumb (transform only) */
-.seg { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--chip); border-radius: 10px; padding: 2px; flex: 1 1 220px; max-width: 340px; }
+.seg { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--chip); border-radius: 10px; padding: 2px; flex: 1 1 100%; max-width: 420px; }
 .seg-thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / 4); border-radius: 8px; background: var(--canvas); box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04); transition: transform 240ms var(--ease-out); }
 @media (prefers-color-scheme: dark) { .seg-thumb { background: #636366; } }
 .seg button { position: relative; z-index: 1; padding: 6px 4px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--ink-2); letter-spacing: -.01em; }
@@ -481,12 +481,10 @@ details.guide[open] summary::after { transform: rotate(45deg); }
 .v-tags { flex: 1; min-width: 0; display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; justify-content: center; }
 .v-tags::-webkit-scrollbar { display: none; }
 .v-tags button { flex: none; font-size: 12.5px; padding: 4px 10px; border-radius: 9999px; background: rgba(255, 255, 255, .14); color: #f5f5f7; }
-.v-info { position: absolute; z-index: 5; left: 0; right: 0; bottom: 0; max-height: 72%; overflow: auto; background: #1c1c1e; color: #f5f5f7; border-radius: 22px 22px 0 0; padding: 8px 18px calc(22px + var(--safe-b)); overscroll-behavior: contain; transition: transform 400ms var(--ease-drawer); }
-@starting-style { .v-info { transform: translateY(100%); } }
+.v-info { position: absolute; z-index: 5; left: 0; right: 0; bottom: 0; max-height: 72%; overflow: auto; -webkit-overflow-scrolling: touch; background: #1c1c1e; color: #f5f5f7; border-radius: 22px 22px 0 0; padding: 8px 18px calc(22px + var(--safe-b)); overscroll-behavior: contain; will-change: transform; }
 @media (min-width: 900px) {
   .viewer.info-open .v-stage, .viewer.info-open .v-top, .viewer.info-open .v-bottom { margin-right: 380px; }
   .v-info { left: auto; top: 0; width: 380px; max-height: none; border-radius: 0; padding-top: calc(16px + var(--safe-t)); }
-  @starting-style { .v-info { transform: translateX(100%); } }
 }
 @media (max-width: 899px) {
   .viewer.info-open .v-stage { flex: none; height: 34%; }
@@ -618,10 +616,10 @@ details.more[open] > summary { margin-bottom: 12px; }
 /* ---------------- settings groups ---------------- */
 .group-row .group-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #fff; flex: none; margin-right: 12px; }
 .group-row .group-ic svg { width: 17px; height: 17px; }
-.group-ic.security { background: #30a46c; }
-.group-ic.app { background: #8e8e93; }
-.group-ic.limits { background: #ff9f0a; }
-.group-ic.albums { background: var(--primary); }
+.group-ic.gi-security { background: #30a46c; }
+.group-ic.gi-app { background: #8e8e93; }
+.group-ic.gi-limits { background: #ff9f0a; }
+.group-ic.gi-albums { background: var(--primary); }
 .sub-hero .back { margin-bottom: 4px; }
 .set-note { font-size: 13px; color: var(--muted); margin: 10px 20px 0; line-height: 1.45; }
 #tab-settings .row .grow small { line-height: 1.4; }
@@ -641,6 +639,37 @@ details.more[open] > summary { margin-bottom: 12px; }
 
 .wn ul { margin: 0 4px 6px; padding-left: 20px; }
 .wn li { font-size: 15px; line-height: 1.5; color: var(--ink-2); margin-bottom: 6px; list-style: none; text-indent: -20px; }
+
+/* ---------------- viewer: zoom, caption, comments, likes ---------------- */
+#vImg { transform-origin: 50% 50%; will-change: transform; }
+.v-stage.zoomed { cursor: grab; }
+.v-stage.zoomed .v-nav { display: none; }
+.v-caption { position: relative; z-index: 3; padding: 0 16px 2px; font-size: 14px; line-height: 1.4; color: #f5f5f7; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .35)); transition: opacity 200ms ease; }
+.v-caption b { font-weight: 600; margin-right: 4px; }
+.viewer.bare .v-caption, .viewer.dragging .v-caption { opacity: 0; pointer-events: none; }
+@media (max-width: 899px) { .viewer.info-open .v-caption { display: none; } }
+.v-info .cmts { margin-bottom: 8px; }
+.v-info .cmt { position: relative; }
+.v-info .cmt.pinned { background: rgba(41, 151, 255, .1); border-radius: 12px; padding: 10px 12px; border: 0; margin-bottom: 6px; }
+.v-info .cmt .pin-ic { display: inline-flex; width: 14px; height: 14px; color: #2997ff; margin-right: 5px; vertical-align: -2px; }
+.v-info .cmt .pin-ic svg { width: 14px; height: 14px; }
+.v-info .cmt-acts { float: right; display: inline-flex; gap: 10px; }
+.v-info .cmt-acts button { color: #8e8e93; font-size: 12px; padding: 2px 0; }
+.v-info .cmt-text { margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+.v-info .hint { font-size: 12px; color: #8e8e93; margin: 6px 2px 0; }
+.v-info .mark-on { font-size: 18px; line-height: 30px; margin-right: 2px; }
+.v-info .tag-editor .marks-row { margin-top: 0; }
+.v-info .tag-editor input { margin-top: 4px; }
+.chip .heart-solid { width: 13px; height: 13px; fill: var(--heart); }
+.row .heart-solid { width: 18px; height: 18px; fill: var(--heart); flex: none; }
+
+.up-hint { font-size: 13px; line-height: 1.45; color: var(--ink-2); background: var(--chip); border-radius: 12px; padding: 10px 12px; margin: -4px 0 12px; }
+.up-hint .text-btn { padding: 0; font-size: 13px; }
+
+.chip-select { flex: none; appearance: none; -webkit-appearance: none; border: 0; border-radius: 9999px; background: var(--chip); color: var(--ink); font: 500 13px var(--font); padding: 6px 26px 6px 12px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2.6'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-size: 11px; background-position: right 10px center; cursor: pointer; }
+@media (pointer: coarse) { .chip-select { font-size: 16px; padding: 4px 26px 4px 12px; } } /* 16px: iOS doesn't zoom the page when it opens */
+.chip-sep { flex: none; width: 1px; align-self: stretch; margin: 4px 2px; background: var(--hairline); }
+.group-row .group-ic svg { display: block; }
 
 @media (prefers-reduced-motion: reduce) {
   /* keep fades that explain state; drop movement */

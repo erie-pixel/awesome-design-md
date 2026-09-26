@@ -177,7 +177,23 @@ export function applyOp(ix, op) {
       each([op.id], p => { p.comments ||= []; if (!p.comments.some(c => c.id === op.comment.id)) p.comments.push(op.comment); });
       break;
     case 'uncomment':
-      each([op.id], p => { p.comments = (p.comments || []).filter(c => c.id !== op.commentId); });
+      each([op.id], p => {
+        p.comments = (p.comments || []).filter(c => c.id !== op.commentId);
+        if (p.pinned === op.commentId) { delete p.pinned; delete p.caption; delete p.captionBy; }
+      });
+      break;
+    case 'pinComment': // the caption is a pinned comment (null unpins; a legacy caption unpins the same way)
+      each([op.id], p => {
+        const c = op.commentId && (p.comments || []).find(x => x.id === op.commentId);
+        if (c) { p.pinned = c.id; p.caption = c.text; p.captionBy = c.by; } else { delete p.pinned; delete p.caption; delete p.captionBy; }
+      });
+      break;
+    case 'setLive': // the motion of a Live Photo, added after the still was uploaded
+      each([op.id], p => {
+        p.files = { ...p.files, live: op.path };
+        p.liveMime = op.mime;
+        p.sizes = { ...(p.sizes || {}), live: op.size };
+      });
       break;
     case 'deletePhotos':
       for (const id of op.ids) {

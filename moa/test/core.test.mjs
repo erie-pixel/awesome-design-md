@@ -599,3 +599,14 @@ test('crypto: Face ID passkey slot (WebAuthn PRF) opens the album; other keys an
   } finally { delete globalThis.navigator.credentials; }
 });
 
+
+test('recovery vault: the text file names the album and carries a code Moa can read back', async () => {
+  const G = await import('../js/github.js');
+  const code = K.newRecoveryCode();
+  const text = G.vaultText({ album: 'alice/moa-6z301u', title: '비밀 여행', code, at: '2026-09-26T00:00:00Z' });
+  assert.match(text, /Album: alice\/moa-6z301u \(비밀 여행\)/);
+  assert.equal(G.vaultCode(text), code);
+  assert.equal(G.vaultCode('Code: nope'), null);
+  assert.equal(G.vaultCode(null), null);
+  assert.equal(G.vaultPath('Alice', 'Moa-6Z301U'), 'recovery/alice/moa-6z301u.txt');
+});

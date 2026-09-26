@@ -475,12 +475,18 @@ try {
   if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13-new-encrypted.png` }); }
   await A.click('#nrOk');
   await A.waitForFunction(() => document.querySelector('#content .empty h2')?.textContent.includes('Add your first photos'), null, { timeout: 20000 });
+  await A.waitForSelector('#vdShow');
+  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13b-recovery-vault.png` }); }
+  const VAULT = api.at('alice/moa-vault');
+  const vaultFile = `recovery/alice/${encName}.txt`;
+  ok(VAULT?.repo.private && VAULT.paths().includes(vaultFile) && !VAULT.repo.topics?.includes('moa-album'), 'the recovery code went into alice\'s own private moa-vault repository (not an album)');
+  await A.click('#vdShow');
   await A.waitForSelector('#rcCode');
   const REC = (await A.textContent('#rcCode')).trim();
-  ok(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){5}$/.test(REC), `a recovery code is shown once the album exists (${REC.slice(0, 4)}-…)`);
-  if (SHOTS) { await A.waitForTimeout(300); await A.screenshot({ path: `${SHOTS}/13b-recovery-code.png` }); }
+  ok(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){5}$/.test(REC) && VAULT.fileText(vaultFile).includes(`Code: ${REC}`), `the vault file holds the same code, which can also be shown (${REC.slice(0, 4)}-…)`);
   await A.click('#sheet [data-close].btn-primary');
   const RE = api.at(`alice/${encName}`);
+  ok(!RE.fileText('album.json').includes(REC) && JSON.parse(RE.fileText('album.json')).recovery.vault?.owner === 'alice', 'the album repository never holds the code, only where alice keeps it');
   ok(!!JSON.parse(RE.fileText('album.json')).recovery, 'album.json also holds the key wrapped by the recovery code');
   const header = JSON.parse(RE.fileText('album.json'));
   ok(K.isHeader(header) && !RE.fileText('album.json').includes('비밀') && RE.repo.description === 'Moa · encrypted' && !RE.fileText('README.md').includes('비밀'), 'album.json holds only the wrapped key; no title in description or README');
@@ -581,19 +587,35 @@ try {
   // forgot the passphrase: the recovery code opens the album, then a new passphrase is set
   const PASS3 = 'third passphrase after recovery';
   await B.click('#unlockForgot');
+  ok(await B.isHidden('#vaultBox'), 'a member isn\'t offered GitHub recovery (the vault is the owner\'s)');
   await B.fill('#unlockCode', REC.toLowerCase().replace(/-/g, ' '));
   await B.click('#unlockBtn');
-  await B.waitForSelector('#ppOk', { timeout: 20000 });
   await B.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
-  ok(await B.isHidden('#ppOldBox'), 'recovery code unlocks and asks for a new passphrase (no old one needed)');
+  await B.waitForTimeout(500);
+  ok(!(await B.isVisible('#ppOk')), 'a member opens with the recovery code but isn\'t asked to change the passphrase');
+  await B.click('[data-tab=settings]');
+  ok(!(await B.isVisible('#tab-settings [data-act=passphrase]')) && !(await B.isVisible('#tab-settings [data-act=recovery]')), 'only the owner sees "Change passphrase" and "Passphrase recovery"');
+  await B.click('[data-tab=photos]');
+
+  // the owner forgot the passphrase: GitHub recovery reads the code from moa-vault, then a new passphrase
+  await A.click('[data-tab=settings]');
+  await A.click('[data-act=lockHere]');
+  await A.waitForSelector('#unlockForm');
+  await A.click('#unlockForgot');
+  await A.waitForSelector('#vaultRecover');
+  if (SHOTS) await A.screenshot({ path: `${SHOTS}/15b-recover-github.png` });
+  await A.click('#vaultRecover');
+  await A.waitForSelector('#ppOk', { timeout: 20000 });
+  await A.waitForFunction(() => document.querySelectorAll('#content .tile').length === 1, null, { timeout: 20000 });
+  ok(await A.isHidden('#ppOldBox'), 'owner recovers with GitHub (no code typed) and is asked for a new passphrase');
   const hRec = RE.fileText('album.json');
-  await B.fill('#encPass', PASS3);
-  await B.fill('#encPass2', PASS3);
-  await B.click('#ppOk');
+  await A.fill('#encPass', PASS3);
+  await A.fill('#encPass2', PASS3);
+  await A.click('#ppOk');
   await until(() => RE.fileText('album.json') !== hRec && RE.history().length === 1, 150000);
   const h3 = JSON.parse(RE.fileText('album.json'));
   const k3 = await K.unlockAlbumKey(h3, PASS3);
-  ok(!!k3 && !!(await K.unlockWithRecovery(h3, REC)), 'new passphrase works and the recovery code still does');
+  ok(!!k3 && !!(await K.unlockWithRecovery(h3, REC)) && h3.recovery.vault, 'new passphrase works; the vault code still does');
 
   // turn encryption off, then on again, on the same album
   const sealedSha = RE.shaOf(RE.paths().find(p => p.startsWith('data/')));
@@ -614,8 +636,8 @@ try {
   await A.fill('#encPass', PASS4);
   await A.fill('#encPass2', PASS4);
   await A.click('#cvGo');
-  await A.waitForSelector('#rcCode', { timeout: 150000 });
-  ok(true, 'encrypting an existing album hands out a recovery code');
+  await A.waitForSelector('#vdShow', { timeout: 150000 });
+  ok(VAULT.paths().includes(vaultFile) && K.normalizeRecoveryCode(/Code: (\S+)/.exec(VAULT.fileText(vaultFile))[1]) !== REC, 'encrypting an existing album keeps a new recovery code in the vault');
   await A.click('#sheet [data-close].btn-primary');
   await until(() => RE.history().length === 1 && K.isHeader(JSON.parse(RE.fileText('album.json'))), 150000);
   const reStored = RE.paths().filter(p => p !== 'album.json' && p !== 'README.md');

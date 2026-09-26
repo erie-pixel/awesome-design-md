@@ -602,6 +602,10 @@ button.map-note:disabled { color: var(--muted); font-weight: 400; }
 .pk-list { margin: 0 0 12px; }
 .pk-list .row small { color: var(--muted); }
 
+.warn-note { font-size: 13px; color: var(--warn); }
+.vault-opt .grow small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.35; margin-top: 2px; }
+.vault-opt .grow b { display: block; }
+
 @media (prefers-reduced-motion: reduce) {
   /* keep fades that explain state; drop movement */
   .sheet, .scrim.open .sheet, .select-bar, .toast, .v-info, .seg-thumb, .tab-thumb, .switch span::after, .tile, .tile img, .v-media { transition-property: opacity, background-color, color !important; }

@@ -269,6 +269,35 @@ export class Repo {
     await this.req('PUT', `/contents/${encPath(path)}`, { body: { message, content: textToBase64(text) } });
   }
 
+  /** Small text files in one commit (the recovery vault). text null = delete (path must exist). */
+  async writeFiles(files, message) {
+    if (!this.branch) await this.info();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const head = await this.head();
+      if (!head) { // an empty repository only takes a first commit through the contents API
+        for (const [path, text] of Object.entries(files)) if (text != null) await this.seed(path, text, message);
+        return;
+      }
+      const tree = await this.treeOf(head);
+      const entries = [];
+      for (const [path, text] of Object.entries(files)) entries.push({ path, mode: '100644', type: 'blob', sha: text == null ? null : await this.blob(textToBase64(text)) });
+      const newTree = (await this.req('POST', '/git/trees', { body: { base_tree: tree, tree: entries } })).sha;
+      const c = await this.req('POST', '/git/commits', { body: { message, tree: newTree, parents: [head] } });
+      await this.gate();
+      try { await this.req('PATCH', `/git/refs/heads/${encodeURIComponent(this.branch)}`, { body: { sha: c.sha, force: false } }); return; } catch (e) {
+        if (e.status !== 422 && e.status !== 409) throw e;
+        await sleep(300 + Math.random() * 500);
+      }
+    }
+    throw new GitHubError(409, t('gh.conflict'));
+  }
+
+  async readText(path) {
+    if (!this.branch) await this.info();
+    const b = await this.file(path);
+    return b ? utf8.decode(new Uint8Array(await b.arrayBuffer())) : null;
+  }
+
   /**
    * One atomic commit: new blobs + ops replayed on the freshest index.
    * files: [{ path, sha }] — already-created blobs.
@@ -466,6 +495,17 @@ export class Repo {
 }
 
 export const ALBUM_TOPIC = 'moa-album';
+export const VAULT_REPO = 'moa-vault';
+const VAULT_DESCRIPTION = 'Moa recovery codes for your encrypted albums. Keep it private and never add collaborators.';
+
+/** The text file a recovery code is kept in, and reading it back. */
+export function vaultText({ album, title, code, at }) {
+  return `Moa recovery code\n\nAlbum: ${album}${title ? ` (${title})` : ''}\nCode: ${code}\nSaved: ${at}\n\n`
+    + 'Opens this album if its passphrase is lost: Moa → locked album → Forgot passphrase? → Recover with GitHub.\n'
+    + 'Anyone who can read this repository can open the album. Keep this repository private and never add collaborators.\n';
+}
+export const vaultCode = text => /^Code:\s*([0-9A-Z]{4}(?:-[0-9A-Z]{4}){5})\s*$/m.exec(text || '')?.[1] || null;
+export const vaultPath = (owner, repo) => `recovery/${owner.toLowerCase()}/${repo.toLowerCase()}.txt`;
 export const ENCRYPTED_DESCRIPTION = 'Moa · encrypted'; // the title stays inside the album
 
 /** Account-level calls for a signed-in user (no particular repository). */
@@ -489,6 +529,19 @@ export class Account {
     const r = await this.req('POST', '/user/repos', { body: { name, description, private: true, has_issues: false, has_projects: false, has_wiki: false } });
     await this.req('PUT', `/repos/${r.owner.login}/${r.name}/topics`, { body: { names: [ALBUM_TOPIC] } }).catch(() => {});
     return r;
+  }
+
+  /**
+   * The person's recovery vault: a private repository of their own that no album member is
+   * invited to. Recovery codes of the encrypted albums they own are kept there as text files,
+   * so their GitHub account can open an album whose passphrase is lost.
+   */
+  async vault(login, { create = false } = {}) {
+    let r = await this.repo(login, VAULT_REPO);
+    if (!r && create) r = await this.req('POST', '/user/repos', { body: { name: VAULT_REPO, description: VAULT_DESCRIPTION, private: true, has_issues: false, has_projects: false, has_wiki: false } });
+    if (!r) return null;
+    if (!r.private) throw new GitHubError(403, t('vault.public', { repo: r.full_name })); // never keep keys in a public repository
+    return new Repo({ owner: r.owner.login, repo: r.name, token: this.r.token, api: this.api, branch: r.default_branch });
   }
 
   invitations() { return this.req('GET', '/user/repository_invitations?per_page=100'); }

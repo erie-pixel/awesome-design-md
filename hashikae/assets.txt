@@ -1,10 +1,14 @@
 banners/ev_2026_autumn.webp
 banners/standard.webp
 figs/byeol.png
+figs/byeol_art.webp
 figs/cat.png
 figs/gaon.png
+figs/gaon_art.webp
 figs/hoshi.png
+figs/hoshi_art.webp
 figs/luna.png
+figs/luna_art.webp
 fonts/Galmuri11-Bold.woff2
 fonts/Galmuri11.woff2
 fonts/LICENSE.txt
@@ -102,6 +106,7 @@ models/view/ac_arcade_r90.glb
 models/view/ac_barrels.glb
 models/view/ac_bench.glb
 models/view/ac_bike.glb
+models/view/ac_bike_lean.glb
 models/view/ac_boat.glb
 models/view/ac_booth_r0.glb
 models/view/ac_bridge.glb
@@ -114,6 +119,7 @@ models/view/ac_convenience_r90.glb
 models/view/ac_cottage_r0.glb
 models/view/ac_cottage_r90.glb
 models/view/ac_fence.glb
+models/view/ac_florist_r90.glb
 models/view/ac_flowers.glb
 models/view/ac_lamp.glb
 models/view/ac_lamp_short.glb

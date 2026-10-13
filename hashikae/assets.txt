@@ -1,6 +1,10 @@
 banners/ev_2026_autumn.webp
 banners/standard.webp
+figs/byeol.png
 figs/cat.png
+figs/gaon.png
+figs/hoshi.png
+figs/luna.png
 fonts/Galmuri11-Bold.woff2
 fonts/Galmuri11.woff2
 fonts/LICENSE.txt

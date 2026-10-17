@@ -25,6 +25,10 @@ icon/icon-192.png
 icon/icon-512.png
 icon/manifest.webmanifest
 machines/crane.png
+machines/crane.webp
+machines/fish.webp
+machines/hook.webp
+machines/triple.webp
 models/bld_lod/m11_01_apartment.glb
 models/bld_lod/m11_02_office.glb
 models/bld_lod/m11_03_convenience.glb
